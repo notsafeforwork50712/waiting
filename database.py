@@ -393,36 +393,3 @@ def update_kiosk_queue_status(facing_member_id, new_status='Handled'):
             conn.close()
 
 # --- End Kiosk Queue Functions ---
-
-
-def get_current_visitor_count():
-    """Returns the count of visitors currently checked in."""
-    conn = create_connection()
-    if not conn:
-        return 0, "Database connection failed"
-
-    cursor = conn.cursor()
-    sql = f"""
-        SELECT COUNT(*) AS CurrentVisitors
-        FROM {DB_TABLE}
-        WHERE Status = 'CheckedIn'
-    """
-    try:
-        cursor.execute(sql)
-        count = cursor.fetchone()[0]
-        logging.info(f"Current visitor count: {count}")
-        return count, None
-    except pyodbc.Error as ex:
-        sqlstate = ex.args[0]
-        message = ex.args[1]
-        logging.error(f"Failed to get visitor count. SQLSTATE: {sqlstate} Message: {message}")
-        return 0, f"Database error: {message}"
-    except Exception as e:
-        logging.error(f"An unexpected error occurred while getting visitor count: {str(e)}")
-        return 0, f"An unexpected error occurred: {str(e)}"
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-        
