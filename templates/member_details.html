@@ -1,0 +1,159 @@
+{% extends 'layout_advanced.html' %}
+
+{% block title %}Member Details{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Member Details – Check‑in ID: {{ checkin_id }}</h2>
+    <a href="{{ url_for('view_kiosk_queue') }}" class="btn btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i> Back to Kiosk Queue
+    </a>
+  </div>
+
+  <div class="row">
+    <!-- DNA -->
+    <div class="col-md-4">
+      <h4>DNA Accounts</h4>
+      {% if dna_connected %}
+        {% if dna_data %}
+          <p><strong>Name:</strong> {{ dna_data.firstname }} {{ dna_data.lastname }}</p>
+          <p><strong>Member Number:</strong> {{ dna_data.member_number }}</p>
+          <p><strong>Address:</strong> {{ dna_data.address }}</p>
+
+          <h5>Accounts</h5>
+          {% if dna_data.accounts %}
+            <div class="list-group">
+              {% for acct in dna_data.accounts %}
+                <a href="#tx-{{ loop.index }}"
+                   class="list-group-item list-group-item-action"
+                   data-bs-toggle="collapse"
+                   style="cursor:pointer">
+                  <strong>{{ acct.account_type or 'Account' }}:</strong> {{ acct.account_number }}<br>
+                  Balance: {{ acct.balance }}<br>
+                  Opened: {{ acct.date_opened }}<br>
+                  Status: {{ acct.status }}
+                </a>
+                <div class="collapse mt-1 mb-2" id="tx-{{ loop.index }}">
+                  <div class="card card-body small">
+                    {% set txs = account_transactions.get(acct.account_number) %}
+                    {% if txs is not none %}
+                      {% if txs %}
+                        <small><strong>Recent Transactions:</strong></small>
+                        <ul class="list-group list-group-flush small">
+                          {% for t in txs %}
+                            <li class="list-group-item py-1 px-0 bg-transparent">
+                              {{ t.date }}{% if t.time %} {{ t.time }}{% endif %}: {{ t.description }} ({{ t.amount }})
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      {% else %}
+                        <p class="small mb-0">No recent transactions found.</p>
+                      {% endif %}
+                    {% else %}
+                      <p class="text-muted"><em>No transaction data available.</em></p>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p>No accounts found.</p>
+          {% endif %}
+        {% else %}
+          <p>No DNA data available.</p>
+        {% endif %}
+      {% else %}
+        <div class="alert alert-warning">Cannot connect to DNA API.</div>
+      {% endif %}
+    </div>
+
+    <!-- MeridianLink -->
+    <div class="col-md-4">
+      <h4>MeridianLink Loans</h4>
+      {% if ml_connected %}
+        {% if ml_data is not none %}
+          {% if ml_data %}
+            <ul class="list-group">
+              {% for loan in ml_data %}
+                <li class="list-group-item">
+                  <strong>Loan Number:</strong> {{ loan.loan_num }}<br>
+                  Type: {{ loan.loan_type }}<br>
+                  Status: {{ loan.loan_status }}<br>
+                  Approval Date: {{ loan.approval_date }}<br>
+                  Borrower: {{ loan.borrower_name }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p>No relevant MeridianLink history found.</p>
+          {% endif %}
+        {% else %}
+          <p>Could not retrieve MeridianLink data.</p>
+        {% endif %}
+      {% else %}
+        <p>Cannot connect to MeridianLink API.</p>
+      {% endif %}
+    </div>
+
+    <!-- Insights -->
+    <div class="col-md-4">
+      <h4>Insights</h4>
+      <div id="insights-box"
+           class="small text-muted"
+           style="white-space: pre-wrap;">
+        {% if insights %}
+          {{ insights }}
+        {% else %}
+          Loading insights...
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+
+{% block scripts %}
+
+  {# — if we already have server‐side insights, render them outright — #}
+  {% if insights %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // simply dump the precomputed insights
+      document.getElementById('insights-box').textContent = `{{ insights|e }}`;
+    });
+  </script>
+
+  {# — otherwise, fire off generation & polling — #}
+  {% else %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const id  = "{{ checkin_id }}";
+      const box = document.getElementById('insights-box');
+
+      // kick off the background job
+      fetch(`/generate_insights/${id}`, { method: 'POST' });
+
+      // then poll every 3s until the backend says “done”
+      (function poll() {
+        fetch(`/get_insights/${id}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.status === 'done') {
+              box.textContent = data.insights;
+            } else {
+              setTimeout(poll, 3000);
+            }
+          })
+          .catch(err => {
+            box.textContent = 'Failed to load insights.';
+            console.error('Insight polling failed:', err);
+          });
+      })();
+    });
+  </script>
+  {% endif %}
+
+{% endblock %}
+

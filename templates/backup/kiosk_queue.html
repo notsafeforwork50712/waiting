@@ -1,0 +1,160 @@
+{% extends 'layout_advanced.html' %}
+
+{% block title %}Kiosk Queue{% endblock %} {# Renamed Title #}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2><i class="fas fa-user-clock me-2"></i>Kiosk Check-in Queue</h2> {# Renamed Header #}
+            <!-- Feature under development notice -->
+            <div class="alert alert-warning d-inline-flex align-items-center p-2 mt-2" role="alert">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <small>Feature Under Development</small>
+            </div>
+        </div>
+        <button onclick="window.location.reload()" class="btn btn-outline-primary">
+            <i class="fas fa-sync-alt me-1"></i> Refresh Queue
+        </button>
+    </div>
+
+    <!-- Kiosk Queue Ticker --> {# Renamed Comment #}
+    {% if waiting_count is defined %}
+    <div class="visitor-ticker mb-4"> <!-- Use existing ticker style -->
+        <div class="ticker-content">
+            <div class="ticker-item">
+                <i class="fas fa-users"></i>
+                <span class="visitor-label">Currently Waiting:</span> {# Renamed Label #}
+                <span class="visitor-count">{{ waiting_count }}</span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header">
+            Waiting List (Today)
+        </div>
+        <div class="card-body p-0"> <!-- Remove padding for full-width tabs -->
+            <!-- Tab Navigation -->
+            <ul class="nav nav-tabs px-3 pt-3" id="kioskQueueTab" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="waiting-tab" data-bs-toggle="tab" data-bs-target="#waiting-tab-pane" type="button" role="tab" aria-controls="waiting-tab-pane" aria-selected="true">
+                        <i class="fas fa-hourglass-half me-1"></i> Waiting <span class="badge rounded-pill bg-danger ms-1">{{ waiting_list | length }}</span>
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="handled-tab" data-bs-toggle="tab" data-bs-target="#handled-tab-pane" type="button" role="tab" aria-controls="handled-tab-pane" aria-selected="false">
+                        <i class="fas fa-check-double me-1"></i> Recently Handled
+                    </button>
+                </li>
+            </ul>
+
+            <!-- Tab Content -->
+            <div class="tab-content" id="kioskQueueTabContent">
+                <!-- Waiting Tab Pane -->
+                <div class="tab-pane fade show active p-3" id="waiting-tab-pane" role="tabpanel" aria-labelledby="waiting-tab" tabindex="0">
+                    {% if waiting_list %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Reason</th>
+                                    <th>Sub-Issue</th>
+                                    <th>Time Checked In</th>
+                                    <th>View</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in waiting_list %}
+                                <tr>
+                                    <td>{{ item.FacingMemberID }}</td>
+                                    <td>{{ item.Name }}</td>
+                                    <td>{{ item.HelpTopic }}</td>
+                                    <td>{{ item.SubIssue | default('N/A') }}</td>
+                                    <td>{{ item.CreatedDate.strftime('%Y-%m-%d %I:%M %p') if item.CreatedDate else 'N/A' }}</td>
+                                    <td>
+                                        {% if item.MemberNumber %}
+                                        <a href="{{ url_for('member_details', checkin_id=item.FacingMemberID) }}" target="_blank" class="btn btn-sm btn-info" title="View Member Details">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <!-- Form to handle the action -->
+                                        <form action="{{ url_for('handle_kiosk_entry', entry_id=item.FacingMemberID) }}" method="POST" class="d-inline">
+                                             <button type="submit" class="btn btn-sm btn-success" title="Mark as Handled">
+                                                 <i class="fas fa-check"></i> Handle
+                                             </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted fst-italic mt-3">No one currently waiting in the kiosk queue.</p>
+                    {% endif %}
+                </div>
+
+                <!-- Handled Tab Pane -->
+                <div class="tab-pane fade p-3" id="handled-tab-pane" role="tabpanel" aria-labelledby="handled-tab" tabindex="0">
+                     {% if handled_list %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Reason</th>
+                                    <th>Sub-Issue</th>
+                                    <th>Time Checked In</th>
+                                    <th>Status</th> <!-- Changed from Action -->
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in handled_list %}
+                                <tr>
+                                    <td>{{ item.FacingMemberID }}</td>
+                                    <td>{{ item.Name }}</td>
+                                    <td>{{ item.HelpTopic }}</td>
+                                    <td>{{ item.SubIssue | default('N/A') }}</td>
+                                    <td>{{ item.CreatedDate.strftime('%Y-%m-%d %I:%M %p') if item.CreatedDate else 'N/A' }}</td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ item.Status | default('Handled') }}</span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted fst-italic mt-3">No recently handled kiosk check-ins found.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+    // Optional: Add JS for auto-refresh or other interactions if needed
+</script>
+{% endblock %}

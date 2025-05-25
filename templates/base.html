@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ title or 'Credit Union Dashboard' }}</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js + Vanta.DOTS for subtle effect -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.dots.min.js"></script>
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght300;400;500;600;700&display=swap" rel="stylesheet"/>
+
+  <style>
+    body { 
+      font-family: 'Inter', sans-serif; 
+      transition: all 0.3s ease;
+    }
+    
+    /* Default theme (dark mode - much darker background) */
+    :root {
+      --bg-primary: #020617;
+      --bg-secondary: #0f172a;
+      --bg-card: rgba(8, 15, 26, 0.85);
+      --text-primary: #ffffff;
+      --text-secondary: #e2e8f0;
+      --text-muted: #94a3b8;
+      --border-color: rgba(59, 130, 246, 0.15);
+      --accent-color: #3b82f6;
+      --vanta-bg: 0x020617;
+      --vanta-color: 0x3b82f6;
+      --symbol-color: rgba(59, 130, 246, 0.1);
+    }
+    
+    /* Light mode with much better contrast */
+    [data-theme="light"] {
+      --bg-primary: #f8f6f3;
+      --bg-secondary: #f1ede8;
+      --bg-card: rgba(255, 253, 250, 0.9);
+      --text-primary: #1a202c;
+      --text-secondary: #2d3748;
+      --text-muted: #4a5568;
+      --border-color: rgba(139, 92, 246, 0.2);
+      --accent-color: #8b5cf6;
+      --vanta-bg: 0xf8f6f3;
+      --vanta-color: 0x8b5cf6;
+      --symbol-color: rgba(139, 92, 246, 0.08);
+    }
+    
+    /* Subtle background animation */
+    #vanta-background {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1;
+      opacity: 0.3;
+    }
+    
+    /* Glass morphism effect for cards */
+    .glass-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+    
+    /* Theme toggle */
+    .theme-toggle {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 100;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      backdrop-filter: blur(12px);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    
+    .theme-toggle:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+    }
+    
+    .theme-toggle:active {
+      transform: translateY(0);
+    }
+    
+    /* Lamp icon animation */
+    .lamp-icon {
+      width: 24px;
+      height: 24px;
+      transition: all 0.3s ease;
+    }
+    
+    .lamp-glow {
+      filter: drop-shadow(0 0 8px var(--accent-color));
+    }
+    
+    /* Modal animations */
+    .modal-overlay {
+      backdrop-filter: blur(8px);
+      background: rgba(0, 0, 0, 0.6);
+    }
+    
+    [data-theme="light"] .modal-overlay {
+      background: rgba(0, 0, 0, 0.3);
+    }
+    
+    .modal-content {
+      transform: translateY(20px);
+      opacity: 0;
+      transition: all 0.3s ease-out;
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+    
+    .modal-content.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    
+    /* Progress bar animations */
+    @keyframes progressAnimation {
+      0% { width: 0%; }
+      100% { width: var(--progress-width); }
+    }
+    
+    .progress-bar {
+      animation: progressAnimation 1.5s ease-out forwards;
+    }
+    
+    /* Hover effects */
+    .hover-glow:hover {
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+      transform: translateY(-2px);
+      transition: all 0.3s ease;
+    }
+    
+    [data-theme="light"] .hover-glow:hover {
+      box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+    }
+    
+    /* Pulse animation for waiting status */
+    .pulse-waiting {
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
+    /* Floating financial symbols */
+    .financial-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -2;
+      overflow: hidden;
+    }
+    
+    .financial-symbol {
+      position: absolute;
+      color: var(--symbol-color);
+      font-size: 2rem;
+      animation: float-symbol 20s infinite linear;
+    }
+    
+    @keyframes float-symbol {
+      0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { transform: translateY(-100px) rotate(360deg); opacity: 0; }
+    }
+    
+    /* Expandable section */
+    .expandable-section {
+      transition: max-height 0.3s ease-out;
+      overflow: hidden;
+    }
+    
+    .expand-button {
+      transition: transform 0.3s ease;
+    }
+    
+    .expand-button.expanded {
+      transform: rotate(180deg);
+    }
+    
+    /* Button styling - keep original size but bigger text for readability */
+    .btn-primary {
+      background-color: #2563eb;
+      color: #ffffff !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      font-size: 0.875rem; /* Increased text size for readability */
+      font-weight: 600; /* Make text bolder */
+    }
+
+    .btn-primary:hover {
+      background-color: #1d4ed8;
+      color: #ffffff !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+
+    .btn-success {
+      background-color: #16a34a;
+      color: #ffffff !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      font-size: 0.875rem; /* Increased text size for readability */
+      font-weight: 600; /* Make text bolder */
+    }
+
+    .btn-success:hover {
+      background-color: #15803d;
+      color: #ffffff !important;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+    
+    /* Clickable member names */
+    .member-name-clickable {
+      cursor: pointer;
+      transition: color 0.2s ease;
+    }
+    
+    .member-name-clickable:hover {
+      color: #60a5fa !important;
+    }
+    
+    /* Light mode specific text adjustments for better contrast */
+    [data-theme="light"] .bg-blue-600 { background-color: #2563eb !important; }
+    [data-theme="light"] .bg-blue-700 { background-color: #1d4ed8 !important; }
+    [data-theme="light"] .bg-green-600 { background-color: #16a34a !important; }
+    [data-theme="light"] .bg-green-700 { background-color: #15803d !important; }
+    [data-theme="light"] select { 
+      background-color: #ffffff !important; 
+      color: #1f2937 !important; 
+      border-color: #d1d5db !important;
+    }
+
+    /* Fix header and subtitle contrast in light mode */
+    [data-theme="light"] .text-gray-400 { color: #374151 !important; }
+    [data-theme="light"] .text-gray-500 { color: #374151 !important; }
+
+    /* Fix member card text contrast */
+    [data-theme="light"] .text-gray-200 { color: #1f2937 !important; }
+    [data-theme="light"] .text-gray-300 { color: #1f2937 !important; }
+
+    /* Fix background colors for better contrast */
+    [data-theme="light"] .bg-gray-800 { background-color: #e2e8f0 !important; }
+    [data-theme="light"] .bg-gray-900 { background-color: #f1f5f9 !important; }
+    [data-theme="light"] .bg-gray-800\/30 { background-color: rgba(203, 213, 224, 0.8) !important; }
+    [data-theme="light"] .bg-gray-800\/40 { background-color: rgba(203, 213, 224, 0.9) !important; }
+    [data-theme="light"] .bg-gray-800\/50 { background-color: rgba(148, 163, 184, 0.3) !important; }
+
+    /* Fix border colors */
+    [data-theme="light"] .border-gray-600 { border-color: #9ca3af !important; }
+    [data-theme="light"] .border-gray-700 { border-color: #6b7280 !important; }
+    [data-theme="light"] .border-gray-700\/50 { border-color: rgba(107, 114, 128, 0.5) !important; }
+
+    /* Ensure proper status text colors in light mode */
+    [data-theme="light"] .text-blue-400 { color: #2563eb !important; }
+    [data-theme="light"] .text-green-400 { color: #16a34a !important; }
+    [data-theme="light"] .text-yellow-400 { color: #d97706 !important; }
+    [data-theme="light"] .text-purple-400 { color: #7c3aed !important; }
+
+    /* Fix check-in time and status text */
+    [data-theme="light"] .text-gray-400.text-sm { color: #374151 !important; }
+    [data-theme="light"] .text-yellow-400.text-xs { color: #d97706 !important; font-weight: 600 !important; }
+    [data-theme="light"] .text-blue-400.text-xs { color: #2563eb !important; font-weight: 600 !important; }
+    [data-theme="light"] .text-green-400.text-xs { color: #16a34a !important; font-weight: 600 !important; }
+
+    /* Fix member names and other white text in light mode */
+    [data-theme="light"] .text-white { color: #1f2937 !important; }
+
+    /* Fix section headers and labels */
+    [data-theme="light"] .text-gray-200.mb-6 { color: #1f2937 !important; }
+    [data-theme="light"] .text-gray-300.text-sm.font-medium { color: #374151 !important; font-weight: 600 !important; }
+    [data-theme="light"] .text-gray-400.text-sm.font-mono { color: #374151 !important; }
+
+    /* Fix progress bar labels */
+    [data-theme="light"] .text-yellow-500.text-xs.font-semibold { color: #d97706 !important; }
+    [data-theme="light"] .text-blue-500.text-xs.font-semibold { color: #2563eb !important; }
+
+    /* Refresh icon styling for both themes */
+    [data-theme="light"] .text-blue-400 { color: #7c3aed !important; }
+    [data-theme="light"] .group:hover .text-blue-300 { color: #6d28d9 !important; }
+    
+    /* Custom scrollbar styling to match ui-main */
+    .custom-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(59, 130, 246, 0.3) transparent;
+    }
+    
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(59, 130, 246, 0.3);
+      border-radius: 3px;
+    }
+    
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(59, 130, 246, 0.5);
+    }
+    
+    [data-theme="light"] .custom-scrollbar {
+      scrollbar-color: rgba(139, 92, 246, 0.3) transparent;
+    }
+    
+    [data-theme="light"] .custom-scrollbar::-webkit-scrollbar-thumb {
+      background-color: rgba(139, 92, 246, 0.3);
+    }
+    
+    [data-theme="light"] .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(139, 92, 246, 0.5);
+    }
+  </style>
+</head>
+
+<body class="min-h-screen p-6 overflow-x-hidden transition-colors duration-300" 
+      style="background-color: var(--bg-primary);">
+  
+  <!-- Theme Toggle -->
+  <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+    <svg class="lamp-icon" id="lamp-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: var(--accent-color);">
+      <!-- Lamp base -->
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 21h6M12 3v3m0 0a6 6 0 016 6v1a2 2 0 01-2 2H8a2 2 0 01-2-2v-1a6 6 0 016-6z"/>
+      <!-- Light rays (hidden by default, shown when light mode) -->
+      <g id="light-rays" style="opacity: 0; transition: opacity 0.3s ease;">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 1v2M4.22 4.22l1.42 1.42M1 12h2M4.22 19.78l1.42-1.42M12 21v2M19.78 19.78l-1.42-1.42M21 12h2M19.78 4.22l-1.42 1.42"/>
+      </g>
+    </svg>
+  </div>
+  
+  <!-- Subtle financial background -->
+  <div class="financial-bg" id="financial-bg"></div>
+  <div id="vanta-background"></div>
+  
+  {% block content %}{% endblock %}
+
+  <!-- Member Details Modal -->
+  <div id="member-modal" class="fixed inset-0 z-50 hidden modal-overlay">
+    <div class="flex items-center justify-center min-h-screen p-4">
+      <div class="glass-card rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden modal-content">
+        <!-- Modal Header -->
+        <div class="flex justify-between items-center p-6" style="border-bottom: 1px solid var(--border-color);">
+          <h2 id="modal-title" class="text-2xl font-bold" style="color: var(--text-primary);">Member Details</h2>
+          <button onclick="closeModal()" class="transition-colors" style="color: var(--text-muted);" 
+                  onmouseover="this.style.color='var(--text-primary)'" 
+                  onmouseout="this.style.color='var(--text-muted)'">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        
+        <!-- Modal Content -->
+        <div class="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+          <div id="modal-content" class="space-y-6">
+            <!-- Content will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let vantaEffect;
+    let currentTheme = localStorage.getItem('theme') || 'dark';
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      // Apply saved theme
+      applyTheme(currentTheme);
+      
+      // Initialize background animation
+      initializeVanta();
+      
+      // Create floating financial symbols
+      createFinancialSymbols();
+    });
+    
+    function toggleTheme() {
+      currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      applyTheme(currentTheme);
+      localStorage.setItem('theme', currentTheme);
+      
+      // Reinitialize Vanta with new colors
+      if (vantaEffect) {
+        vantaEffect.destroy();
+      }
+      setTimeout(initializeVanta, 100);
+    }
+    
+    function applyTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      
+      const lampIcon = document.getElementById('lamp-icon');
+      const lightRays = document.getElementById('light-rays');
+      
+      if (theme === 'light') {
+        lampIcon.classList.add('lamp-glow');
+        lightRays.style.opacity = '1';
+      } else {
+        lampIcon.classList.remove('lamp-glow');
+        lightRays.style.opacity = '0';
+      }
+    }
+    
+    function initializeVanta() {
+      const isDark = currentTheme === 'dark';
+      
+      vantaEffect = VANTA.DOTS({
+        el: "#vanta-background",
+        mouseControls: true,
+        touchControls: true,
+        gyroControls: false,
+        backgroundColor: isDark ? 0x020617 : 0xf8f6f3,
+        color: isDark ? 0x3b82f6 : 0x8b5cf6,
+        color2: isDark ? 0x1e40af : 0x7c3aed,
+        size: 3.0,
+        spacing: 40.0,
+        showLines: false
+      });
+    }
+    
+    function createFinancialSymbols() {
+      const symbols = ['$', '€', '£', '¥', '%', '₿', '∑', '∆', '∞', '≈'];
+      const container = document.getElementById('financial-bg');
+      
+      setInterval(() => {
+        if (Math.random() > 0.7) { // 30% chance every interval
+          const symbol = document.createElement('div');
+          symbol.className = 'financial-symbol';
+          symbol.textContent = symbols[Math.floor(Math.random() * symbols.length)];
+          symbol.style.left = Math.random() * 100 + '%';
+          symbol.style.animationDuration = (15 + Math.random() * 10) + 's';
+          symbol.style.fontSize = (1.5 + Math.random() * 1) + 'rem';
+          container.appendChild(symbol);
+          
+          // Remove after animation
+          setTimeout(() => {
+            if (symbol.parentNode) {
+              symbol.parentNode.removeChild(symbol);
+            }
+          }, 25000);
+        }
+      }, 3000);
+    }
+    
+    // Expandable section functionality
+    function toggleExpandableSection(sectionId) {
+      const section = document.getElementById(sectionId);
+      const button = document.querySelector(`[onclick="toggleExpandableSection('${sectionId}')"] .expand-button`);
+      
+      if (section.style.maxHeight && section.style.maxHeight !== 'none') {
+        section.style.maxHeight = 'none';
+        button.classList.add('expanded');
+      } else {
+        section.style.maxHeight = '400px';
+        button.classList.remove('expanded');
+      }
+    }
+    
+    // Modal functions
+    function openMemberModal(memberId, memberName) {
+      const modal = document.getElementById('member-modal');
+      const title = document.getElementById('modal-title');
+      const content = document.getElementById('modal-content');
+      
+      title.textContent = `${memberName}'s Account Overview`;
+      
+      // Fetch member data from Flask backend
+      fetch(`/api/member/${memberId}`)
+        .then(response => response.json())
+        .then(memberData => {
+          populateModalContent(memberData, memberId);
+        })
+        .catch(() => {
+          // Fallback to sample data if API not available
+          const memberData = getSampleMemberData(memberId);
+          populateModalContent(memberData, memberId);
+        });
+      
+      // Show modal
+      modal.classList.remove('hidden');
+      setTimeout(() => {
+        modal.querySelector('.modal-content').classList.add('show');
+      }, 10);
+    }
+    
+    function populateModalContent(memberData, memberId) {
+      const content = document.getElementById('modal-content');
+      const isDark = currentTheme === 'dark';
+      
+      content.innerHTML = `
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- Account Selection -->
+          <div class="space-y-4">
+            <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
+              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path>
+              </svg>
+              Account Selection
+            </h3>
+            <select id="account-select" class="w-full rounded-lg px-4 py-3 focus:outline-none focus:ring-2 border" 
+                    style="background-color: ${isDark ? '#374151' : '#ffffff'}; color: var(--text-primary); border-color: var(--border-color); focus:ring-color: var(--accent-color);">
+              ${memberData.accounts.map(account => `<option value="${account}">${account}</option>`).join('')}
+            </select>
+            
+            <!-- Account Balance -->
+            <div class="rounded-lg p-4 border" style="background: linear-gradient(135deg, ${isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.08)'} 0%, ${isDark ? 'rgba(22, 163, 74, 0.1)' : 'rgba(22, 163, 74, 0.08)'} 100%); border-color: rgba(34, 197, 94, 0.3);">
+              <div class="text-sm" style="color: var(--text-muted);">Current Balance</div>
+              <div class="text-2xl font-bold text-green-500">$${(Math.random() * 10000 + 1000).toFixed(2)}</div>
+            </div>
+          </div>
+          
+          <!-- Recent Transactions -->
+          <div class="lg:col-span-2 space-y-4">
+            <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
+              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+              </svg>
+              Recent Activity
+            </h3>
+            <div id="transactions-list" class="space-y-2 max-h-80 overflow-y-auto rounded-lg p-4" style="background-color: ${isDark ? 'rgba(31, 41, 55, 0.2)' : 'rgba(248, 250, 252, 0.8)'};">
+              ${memberData.transactions[memberData.accounts[0]].map((txn, index) => `
+                <div class="flex justify-between items-center rounded-lg p-3 border-l-4 ${txn.startsWith('+') ? 'border-green-500' : 'border-red-500'}" style="background-color: ${isDark ? 'rgba(31, 41, 55, 0.4)' : 'rgba(255, 255, 255, 0.9)'};">
+                  <div class="flex items-center space-x-3">
+                    <div class="w-2 h-2 rounded-full ${txn.startsWith('+') ? 'bg-green-500' : 'bg-red-500'}"></div>
+                    <span style="color: var(--text-secondary);">${txn}</span>
+                  </div>
+                  <span class="text-xs" style="color: var(--text-muted);">${Math.floor(Math.random() * 30 + 1)} days ago</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          
+          <!-- AI Insights Section -->
+          <div class="lg:col-span-3 space-y-4">
+            <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
+              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+              </svg>
+              AI-Powered Insights
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              ${memberData.insights.map(insight => `
+                <div class="rounded-lg p-4 border" style="background: linear-gradient(135deg, ${isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(139, 92, 246, 0.08)'} 0%, ${isDark ? 'rgba(147, 51, 234, 0.1)' : 'rgba(124, 58, 237, 0.08)'} 100%); border-color: ${isDark ? 'rgba(59, 130, 246, 0.2)' : 'rgba(139, 92, 246, 0.3)'};">
+                  <div class="flex items-start space-x-3">
+                    <div class="w-2 h-2 rounded-full mt-2 flex-shrink-0" style="background-color: var(--accent-color);"></div>
+                    <span class="text-sm" style="color: var(--text-secondary);">${insight}</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+            <div class="text-center text-sm mt-4" style="color: var(--text-muted);">
+              <em>AI insights are continuously updated based on account activity and financial patterns</em>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      // Setup account dropdown
+      setupAccountDropdown(memberId, memberData);
+    }
+    
+    function closeModal() {
+      const modal = document.getElementById('member-modal');
+      const content = modal.querySelector('.modal-content');
+      
+      content.classList.remove('show');
+      setTimeout(() => {
+        modal.classList.add('hidden');
+      }, 300);
+    }
+    
+    function setupAccountDropdown(memberId, memberData) {
+      const dropdown = document.getElementById('account-select');
+      const transactionsList = document.getElementById('transactions-list');
+      
+      dropdown.addEventListener('change', (e) => {
+        const selectedAccount = e.target.value;
+        const transactions = memberData.transactions[selectedAccount] || [];
+        const isDark = currentTheme === 'dark';
+        
+        transactionsList.innerHTML = transactions.map(txn => `
+          <div class="flex justify-between items-center rounded-lg p-3 border-l-4 ${txn.startsWith('+') ? 'border-green-500' : 'border-red-500'} opacity-0 animate-fade-in" style="background-color: ${isDark ? 'rgba(31, 41, 55, 0.4)' : 'rgba(255, 255, 255, 0.9)'};">
+            <div class="flex items-center space-x-3">
+              <div class="w-2 h-2 rounded-full ${txn.startsWith('+') ? 'bg-green-500' : 'bg-red-500'}"></div>
+              <span style="color: var(--text-secondary);">${txn}</span>
+            </div>
+            <span class="text-xs" style="color: var(--text-muted);">${Math.floor(Math.random() * 30 + 1)} days ago</span>
+          </div>
+        `).join('');
+        
+        // Animate in new transactions
+        setTimeout(() => {
+          transactionsList.querySelectorAll('.opacity-0').forEach((el, index) => {
+            setTimeout(() => {
+              el.classList.remove('opacity-0');
+              el.classList.add('opacity-100');
+            }, index * 100);
+          });
+        }, 50);
+      });
+    }
+    
+    function getSampleMemberData(memberId) {
+      // Sample data matching your Flask backend structure
+      const data = {
+        1: {
+          accounts: ["Checking", "Savings"],
+          transactions: {
+            "Checking": [
+              "- $50.00 Grocery", "+ $1,200.00 Payroll", "- $120.00 Utilities",
+              "- $30.00 Coffee", "- $75.00 Gas", "+ $200.00 Refund",
+              "- $60.00 Dining", "- $15.00 Parking", "+ $500.00 Transfer", "- $10.00 ATM Fee"
+            ],
+            "Savings": [
+              "+ $300.00 Transfer", "+ $500.00 Interest", "+ $100.00 Gift",
+              "+ $50.00 Bonus", "+ $20.00 Interest"
+            ]
+          },
+          insights: [
+            "High savings growth (+5%)", 
+            "Low checking balance – consider alert", 
+            "Credit score is excellent",
+            "Spending pattern shows consistent grocery and utility payments"
+          ]
+        },
+        2: {
+          accounts: ["Checking", "Auto Loan"],
+          transactions: {
+            "Checking": [
+              "+ $2,000.00 Payroll", "- $75.00 Grocery", "- $150.00 Electronics",
+              "- $25.00 Coffee"
+            ],
+            "Auto Loan": [
+              "- $250.00 Payment", "- $2.00 Late Fee", "- $250.00 Payment"
+            ]
+          },
+          insights: [
+            "New account funded promptly", 
+            "On-time loan payments", 
+            "Contact info up-to-date",
+            "Perfect payment history on auto loan"
+          ]
+        }
+      };
+      
+      return data[memberId] || data[1];
+    }
+    
+    // Close modal when clicking outside
+    document.addEventListener('click', (e) => {
+      const modal = document.getElementById('member-modal');
+      if (e.target === modal) {
+        closeModal();
+      }
+    });
+    
+    // Close modal with Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+      }
+    });
+  </script>
+</body>
+</html>
