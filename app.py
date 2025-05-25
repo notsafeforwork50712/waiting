@@ -297,7 +297,11 @@ def dashboard():
     return render_template(
         'dashboard.html',
         visitors=visitors,
-        waiting_count=waiting_count
+        waiting_count=waiting_count,
+        selected=None,
+        accounts=[],
+        transactions={},
+        ai_insights=[]
     )
 
 @app.route('/kiosk-queue')
