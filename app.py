@@ -76,6 +76,10 @@ dna_cache = TTLCache(maxsize=200, ttl=3600)   # 1 hr
 transaction_cache = TTLCache(maxsize=500, ttl=600)   # 10 min
 insight_cache = TTLCache(maxsize=100, ttl=600)   # 10 min
 
+# --- Prefetch Locking ---
+prefetch_locks = set()
+recent_prefetches = TTLCache(maxsize=200, ttl=60) # Track recent prefetches for 60 seconds
+
 # Configuration for insights
 INSIGHTS_TRANSACTION_DAYS = int(os.getenv('INSIGHTS_TRANSACTION_DAYS', 30))
 
@@ -91,15 +95,12 @@ def filter_recent_transactions(transactions, days=30):
         tx_date_str = tx.get('date', '')
         if tx_date_str:
             try:
-                # Try to parse the date (adjust format as needed based on your DNA API)
                 tx_date = datetime.strptime(tx_date_str, '%Y-%m-%d')
                 if tx_date >= cutoff_date:
                     recent_transactions.append(tx)
             except ValueError:
-                # If date parsing fails, include the transaction to be safe
                 recent_transactions.append(tx)
         else:
-            # If no date, include the transaction
             recent_transactions.append(tx)
     
     return recent_transactions
@@ -133,12 +134,10 @@ if ML_CLIENT_AVAILABLE:
 # --- Context Processors ---
 @app.context_processor
 def inject_now():
-    """Inject current UTC time."""
     return {'now': datetime.now(datetime.UTC) if hasattr(datetime, 'UTC') else datetime.utcnow()}
 
 @app.context_processor
 def inject_visitor_count():
-    """Inject the current visitor count."""
     count = 0
     try:
         count, error = database.get_current_visitor_count()
@@ -153,12 +152,10 @@ def inject_visitor_count():
 # --- Routes ---
 @app.route('/')
 def index():
-    """Landing page showing new dashboard."""
     return redirect(url_for('dashboard'))
 
 @app.route('/dashboard')
 def dashboard():
-    """Main dashboard with new UI - replaces kiosk queue as primary interface."""
     waiting_list = []
     handled_list = []
     waiting_count = 0
@@ -166,7 +163,6 @@ def dashboard():
     db_error_handled = None
 
     try:
-        # Fetch waiting kiosk check-ins
         waiting_list_result, error_waiting = database.get_kiosk_queue(status='Waiting')
         if error_waiting:
             logging.error(f"[Dashboard] Error fetching waiting check-ins: {error_waiting}")
@@ -174,7 +170,6 @@ def dashboard():
         elif waiting_list_result:
             waiting_list = waiting_list_result
 
-        # Fetch handled kiosk check-ins
         handled_list_result, error_handled = database.get_kiosk_queue(status='Handled')
         if error_handled:
             logging.error(f"[Dashboard] Error fetching handled check-ins: {error_handled}")
@@ -182,7 +177,6 @@ def dashboard():
         elif handled_list_result:
             handled_list = handled_list_result
 
-        # Fetch waiting count
         count, error_count = database.get_kiosk_queue_count(status='Waiting')
         if error_count:
             logging.error(f"[Dashboard] Error fetching waiting count: {error_count}")
@@ -190,68 +184,72 @@ def dashboard():
         else:
             waiting_count = count
 
-        # Start background pre-fetching for waiting members
         if waiting_list and dna_client:
             def prefetch_all_data_background():
-                """Pre-fetch DNA data and transactions for members in a background thread."""
-                global dna_cache, transaction_cache
+                global dna_cache, transaction_cache, prefetch_locks, recent_prefetches
                 logging.info(f"[Dashboard Background] Starting DNA and transaction pre-fetch for {len(waiting_list)} members")
-                for member in waiting_list:
-                    member_number = member.get('MemberNumber')
-                    if member_number:
-                        try:
-                            logging.info(f"[Dashboard Background] Pre-fetching DNA data for member {member_number}")
-                            person_details = None
-                            
-                            if member_number in dna_cache:
-                                person_details = dna_cache[member_number]
-                                logging.info(f"[Dashboard Background] Using cached DNA data for member {member_number}")
-                            else:
-                                try:
-                                    person_details = dna_client.get_person_detail_by_member_number(member_number)
+                for member_checkin_info in waiting_list: 
+                    member_number_from_db = member_checkin_info.get('MemberNumber') 
+                    
+                    if not member_number_from_db: 
+                        logging.info(f"[Dashboard Background] Skipping pre-fetch for check-in ID {member_checkin_info.get('FacingMemberID')} as no member number is set.")
+                        continue
+
+                    if member_number_from_db in prefetch_locks:
+                        logging.info(f"[Dashboard Background] Pre-fetch for member {member_number_from_db} (check-in {member_checkin_info.get('FacingMemberID')}) already in progress. Skipping.")
+                        continue
+                    if member_number_from_db in recent_prefetches:
+                        logging.info(f"[Dashboard Background] Pre-fetch for member {member_number_from_db} (check-in {member_checkin_info.get('FacingMemberID')}) completed recently. Skipping.")
+                        continue
+                        
+                    try:
+                        prefetch_locks.add(member_number_from_db)
+                        logging.info(f"[Dashboard Background] Pre-fetching DNA data for member {member_number_from_db} (check-in {member_checkin_info.get('FacingMemberID')})")
+                        person_details = None
+                        if member_number_from_db in dna_cache:
+                            person_details = dna_cache[member_number_from_db]
+                            logging.info(f"[Dashboard Background] Using cached DNA data for member {member_number_from_db}")
+                        else:
+                            try:
+                                person_details = dna_client.get_person_detail_by_member_number(member_number_from_db)
+                                if person_details:
+                                    dna_cache[member_number_from_db] = person_details
+                                    logging.info(f"[Dashboard Background] Successfully pre-fetched DNA data for member {member_number_from_db}")
+                            except AttributeError: 
+                                person_number_from_dna_lookup = dna_client.get_person_number_by_member_number(member_number_from_db)
+                                if person_number_from_dna_lookup:
+                                    person_details = dna_client.get_taxid_data_by_person_number(person_number_from_dna_lookup)
                                     if person_details:
-                                        dna_cache[member_number] = person_details
-                                        logging.info(f"[Dashboard Background] Successfully pre-fetched DNA data for member {member_number}")
-                                except AttributeError:
-                                    person_number = dna_client.get_person_number_by_member_number(member_number)
-                                    if person_number:
-                                        person_details = dna_client.get_taxid_data_by_person_number(person_number)
-                                        if person_details:
-                                            dna_cache[member_number] = person_details
-                                            logging.info(f"[Dashboard Background] Successfully pre-fetched DNA data for member {member_number} (fallback)")
-                            
-                            # Pre-fetch transactions for each account
-                            if person_details and 'accounts' in person_details:
-                                logging.info(f"[Dashboard Background] Pre-fetching transactions for all accounts of member {member_number}")
-                                
-                                if member_number not in transaction_cache:
-                                    transaction_cache[member_number] = {}
-                                    
-                                for account in person_details['accounts']:
-                                    account_number = account.get('account_number')
-                                    if account_number:
-                                        if account_number not in transaction_cache[member_number]:
-                                            logging.info(f"[Dashboard Background] Fetching transactions for account {account_number}")
-                                            try:
-                                                transactions = dna_client.get_financial_transactions(account_number, limit=50)  # Get more for background cache
-                                                if transactions is not None:
-                                                    transaction_cache[member_number][account_number] = transactions
-                                                    logging.info(f"[Dashboard Background] Successfully pre-fetched {len(transactions)} transactions for account {account_number}")
-                                                else:
-                                                    logging.warning(f"[Dashboard Background] Failed to fetch transactions for account {account_number}")
-                                                    transaction_cache[member_number][account_number] = []
-                                            except Exception as tx_e:
-                                                logging.error(f"[Dashboard Background] Error fetching transactions for account {account_number}: {tx_e}", exc_info=True)
-                                                transaction_cache[member_number][account_number] = []
+                                        dna_cache[member_number_from_db] = person_details
+                                        logging.info(f"[Dashboard Background] Successfully pre-fetched DNA data for member {member_number_from_db} (fallback)")
+                        
+                        if person_details and 'accounts' in person_details:
+                            logging.info(f"[Dashboard Background] Pre-fetching transactions for all accounts of member {member_number_from_db}")
+                            if member_number_from_db not in transaction_cache:
+                                transaction_cache[member_number_from_db] = {}
+                            for account in person_details['accounts']:
+                                account_number = account.get('account_number')
+                                if account_number and account_number not in transaction_cache[member_number_from_db]:
+                                    logging.info(f"[Dashboard Background] Fetching transactions for account {account_number}")
+                                    try:
+                                        transactions = dna_client.get_financial_transactions(account_number, limit=50)
+                                        if transactions is not None:
+                                            transaction_cache[member_number_from_db][account_number] = transactions
                                         else:
-                                            logging.info(f"[Dashboard Background] Using cached transactions for account {account_number}")
-                                
-                                logging.info(f"[Dashboard Background] Completed pre-fetching transactions for member {member_number}")
-                            
-                        except Exception as e:
-                            logging.warning(f"[Dashboard Background] Failed to pre-fetch data for member {member_number}: {e}")
-                
-                logging.info(f"[Dashboard Background] Completed DNA and transaction pre-fetch for all members. DNA cache size: {len(dna_cache)}, Transaction cache size: {len(transaction_cache)}")
+                                            transaction_cache[member_number_from_db][account_number] = []
+                                    except Exception as tx_e:
+                                        logging.error(f"[Dashboard Background] Error fetching transactions for account {account_number}: {tx_e}", exc_info=True)
+                                        transaction_cache[member_number_from_db][account_number] = []
+                                elif account_number in transaction_cache[member_number_from_db]:
+                                     logging.info(f"[Dashboard Background] Using cached transactions for account {account_number}")
+                            logging.info(f"[Dashboard Background] Completed pre-fetching transactions for member {member_number_from_db}")
+                    except Exception as e:
+                        logging.warning(f"[Dashboard Background] Failed to pre-fetch data for member {member_number_from_db}: {e}")
+                    finally:
+                        if member_number_from_db in prefetch_locks:
+                            prefetch_locks.remove(member_number_from_db)
+                        recent_prefetches[member_number_from_db] = True
+                logging.info(f"[Dashboard Background] Completed DNA and transaction pre-fetch. DNA cache: {len(dna_cache)}, Tx cache: {len(transaction_cache)}")
             
             background_thread = threading.Thread(target=prefetch_all_data_background)
             background_thread.daemon = True
@@ -260,496 +258,320 @@ def dashboard():
 
     except Exception as e:
         logging.error(f"[Dashboard] Exception fetching dashboard data: {e}", exc_info=True)
-        waiting_list = []
-        handled_list = []
-        waiting_count = 0
+        waiting_list, handled_list, waiting_count = [], [], 0
 
-    # Transform data for new UI format
     visitors = []
-    
-    # Add waiting members as active visitors
     for member in waiting_list:
-        visitor = {
-            'id': member.get('FacingMemberID'),
-            'name': member.get('Name', 'Unknown'),
+        visitors.append({
+            'id': member.get('FacingMemberID'), 'name': member.get('Name', 'Unknown'),
             'checkin_time': member.get('CreatedDate').strftime('%I:%M %p') if member.get('CreatedDate') else 'Unknown',
             'status': 'waiting'
-        }
-        visitors.append(visitor)
-    
-    # Add handled members as completed visitors - use UpdatedDate for completion time
+        })
     for member in handled_list:
-        # Use UpdatedDate for completion time if available, otherwise fall back to CreatedDate
-        completion_time = 'Unknown'
-        if member.get('UpdatedDate'):
-            completion_time = member.get('UpdatedDate').strftime('%I:%M %p')
-        elif member.get('CreatedDate'):
-            completion_time = member.get('CreatedDate').strftime('%I:%M %p')
-        
-        visitor = {
-            'id': member.get('FacingMemberID'),
-            'name': member.get('Name', 'Unknown'),
-            'checkin_time': completion_time,
-            'status': 'done'
-        }
-        visitors.append(visitor)
+        completion_time = (member.get('UpdatedDate') or member.get('CreatedDate')).strftime('%I:%M %p') if (member.get('UpdatedDate') or member.get('CreatedDate')) else 'Unknown'
+        visitors.append({
+            'id': member.get('FacingMemberID'), 'name': member.get('Name', 'Unknown'),
+            'checkin_time': completion_time, 'status': 'done'
+        })
+    return render_template('dashboard.html', visitors=visitors, waiting_count=waiting_count, selected=None, accounts=[], transactions={}, ai_insights=[])
 
-    return render_template(
-        'dashboard.html',
-        visitors=visitors,
-        waiting_count=waiting_count,
-        selected=None,
-        accounts=[],
-        transactions={},
-        ai_insights=[]
-    )
-
-@app.route('/kiosk-queue')
+@app.route('/kiosk-queue') 
 def view_kiosk_queue():
-    """Displays the kiosk check-in queue with Waiting and Handled tabs."""
     waiting_list = []
-    handled_list = []
-    waiting_count = 0
-    db_error_waiting = None
-    db_error_handled = None
-
     try:
-        # Fetch waiting kiosk check-ins
-        waiting_list_result, error_waiting = database.get_kiosk_queue(status='Waiting')
-        if error_waiting:
-            logging.error(f"[Kiosk Queue] Error fetching waiting check-ins: {error_waiting}")
-            db_error_waiting = "Could not load waiting list."
-        elif waiting_list_result:
-            waiting_list = waiting_list_result
-
-        # Fetch handled kiosk check-ins
-        handled_list_result, error_handled = database.get_kiosk_queue(status='Handled')
-        if error_handled:
-            logging.error(f"[Kiosk Queue] Error fetching handled check-ins: {error_handled}")
-            db_error_handled = "Could not load handled list."
-        elif handled_list_result:
-            handled_list = handled_list_result
-
-        # Fetch waiting count
-        count, error_count = database.get_kiosk_queue_count(status='Waiting')
-        if error_count:
-            logging.error(f"[Kiosk Queue] Error fetching waiting count: {error_count}")
-            waiting_count = len(waiting_list)
-            if not db_error_waiting and not db_error_handled:
-                flash("Could not load waiting count.", 'warning')
-        else:
-            waiting_count = count
-
-        # Start background pre-fetching for waiting members
-        if waiting_list and dna_client:
-            def prefetch_all_data_background():
-                """Pre-fetch DNA data and transactions for members in a background thread."""
-                global dna_cache, transaction_cache
-                logging.info(f"[Background] Starting DNA and transaction pre-fetch for {len(waiting_list)} members")
-                for member in waiting_list:
-                    member_number = member.get('MemberNumber')
-                    if member_number:
-                        try:
-                            logging.info(f"[Background] Pre-fetching DNA data for member {member_number}")
-                            person_details = None
-                            
-                            if member_number in dna_cache:
-                                person_details = dna_cache[member_number]
-                                logging.info(f"[Background] Using cached DNA data for member {member_number}")
-                            else:
-                                try:
-                                    person_details = dna_client.get_person_detail_by_member_number(member_number)
-                                    if person_details:
-                                        dna_cache[member_number] = person_details
-                                        logging.info(f"[Background] Successfully pre-fetched DNA data for member {member_number}")
-                                except AttributeError:
-                                    person_number = dna_client.get_person_number_by_member_number(member_number)
-                                    if person_number:
-                                        person_details = dna_client.get_taxid_data_by_person_number(person_number)
-                                        if person_details:
-                                            dna_cache[member_number] = person_details
-                                            logging.info(f"[Background] Successfully pre-fetched DNA data for member {member_number} (fallback)")
-                            
-                            # Pre-fetch transactions for each account
-                            if person_details and 'accounts' in person_details:
-                                logging.info(f"[Background] Pre-fetching transactions for all accounts of member {member_number}")
-                                
-                                if member_number not in transaction_cache:
-                                    transaction_cache[member_number] = {}
-                                    
-                                for account in person_details['accounts']:
-                                    account_number = account.get('account_number')
-                                    if account_number:
-                                        if account_number not in transaction_cache[member_number]:
-                                            logging.info(f"[Background] Fetching transactions for account {account_number}")
-                                            try:
-                                                transactions = dna_client.get_financial_transactions(account_number, limit=10)
-                                                if transactions is not None:
-                                                    transaction_cache[member_number][account_number] = transactions
-                                                    logging.info(f"[Background] Successfully pre-fetched {len(transactions)} transactions for account {account_number}")
-                                                else:
-                                                    logging.warning(f"[Background] Failed to fetch transactions for account {account_number}")
-                                                    transaction_cache[member_number][account_number] = []
-                                            except Exception as tx_e:
-                                                logging.error(f"[Background] Error fetching transactions for account {account_number}: {tx_e}", exc_info=True)
-                                                transaction_cache[member_number][account_number] = []
-                                        else:
-                                            logging.info(f"[Background] Using cached transactions for account {account_number}")
-                                
-                                logging.info(f"[Background] Completed pre-fetching transactions for member {member_number}")
-                            
-                        except Exception as e:
-                            logging.warning(f"[Background] Failed to pre-fetch data for member {member_number}: {e}")
-                
-                logging.info(f"[Background] Completed DNA and transaction pre-fetch for all members. DNA cache size: {len(dna_cache)}, Transaction cache size: {len(transaction_cache)}")
-            
-            background_thread = threading.Thread(target=prefetch_all_data_background)
-            background_thread.daemon = True
-            background_thread.start()
-            logging.info("[Kiosk Queue] Started background thread for DNA and transaction pre-fetching")
-
+        waiting_list_result, _ = database.get_kiosk_queue(status='Waiting')
+        if waiting_list_result: waiting_list = waiting_list_result
     except Exception as e:
-        logging.error(f"[Kiosk Queue] Exception fetching kiosk queue data: {e}", exc_info=True)
-        flash("An unexpected error occurred loading kiosk queue data.", 'danger')
-        waiting_list = []
-        handled_list = []
-        waiting_count = 0
+        logging.error(f"[Kiosk Queue] Exception: {e}", exc_info=True)
+    return render_template('kiosk_queue.html', waiting_list=waiting_list, handled_list=[], waiting_count=len(waiting_list))
 
-    if db_error_waiting:
-        flash(db_error_waiting, 'danger')
-    if db_error_handled:
-        flash(db_error_handled, 'danger')
-
-    return render_template(
-        'kiosk_queue.html',
-        waiting_list=waiting_list,
-        handled_list=handled_list,
-        waiting_count=waiting_count
-    )
 
 @app.route('/handle-kiosk-entry/<int:entry_id>', methods=['POST'])
 def handle_kiosk_entry(entry_id):
-    """Handles marking a kiosk queue entry as 'Handled'."""
     logging.info(f"[Kiosk Queue] Attempting to mark entry ID {entry_id} as Handled.")
     success, message = database.update_kiosk_queue_status(entry_id, 'Handled')
-
-    if success:
-        flash(f"Entry #{entry_id} marked as handled.", 'success')
-    else:
-        log_message = f"Failed to mark entry ID {entry_id} as handled."
-        if message:
-            log_message += f" Reason: {message}"
-            if "schema error" in message.lower():
-                flash("Cannot update status due to a database configuration issue (Missing 'Status' column?). Please contact administrator.", 'danger')
-            elif "not found" in message.lower() or "already has status" in message.lower():
-                flash(f"Could not update entry #{entry_id}: {message}", 'warning')
-            else:
-                flash(f"An error occurred updating entry #{entry_id}.", 'danger')
-        else:
-            flash(f"An unexpected error occurred updating entry #{entry_id}.", 'danger')
-        logging.warning(log_message)
-
+    if success: flash(f"Entry #{entry_id} marked as handled.", 'success')
+    else: flash(f"Error updating entry #{entry_id}: {message}", 'danger')
     return redirect(url_for('dashboard'))
 
 @app.route('/pickup/<int:visitor_id>')
 def pickup(visitor_id):
-    """Handle member pickup - marks them as handled and redirects to dashboard."""
     logging.info(f"[Dashboard] Attempting to mark member ID {visitor_id} as handled via pickup.")
-    success, message = database.update_kiosk_queue_status(visitor_id, 'Handled')
-    
-    if success:
-        logging.info(f"[Dashboard] Member ID {visitor_id} successfully marked as handled.")
-    else:
-        logging.warning(f"[Dashboard] Failed to mark member ID {visitor_id} as handled: {message}")
-    
+    success, message = database.update_kiosk_queue_status(visitor_id, 'Handled') 
+    if success: logging.info(f"[Dashboard] Member ID {visitor_id} successfully marked as handled.")
+    else: logging.warning(f"[Dashboard] Failed to mark member ID {visitor_id} as handled: {message}")
     return redirect(url_for('dashboard'))
 
-@app.route('/api/member/<int:member_id>')
-def get_member_data(member_id):
-    """API endpoint to get member data for the dashboard modal."""
+@app.route('/api/member/<int:checkin_id_for_api>') 
+def get_member_data(checkin_id_for_api):
     try:
-        # Get member record
-        record, error = database.get_facing_member_details(member_id)
-        if error or not record:
-            return jsonify({'error': 'Member not found'}), 404
+        record, error = database.get_facing_member_details(checkin_id_for_api)
+        if error or not record: return jsonify({'error': 'Member not found'}), 404
         
-        member_number = record.get('MemberNumber')
-        if not member_number:
-            return jsonify({'error': 'No member number associated with this check-in'}), 400
+        member_number_to_use = record.get('MemberNumber') 
+        if not member_number_to_use: return jsonify({'error': 'No member number available for API queries'}), 400
+
+        dna_data, ml_data, accounts, transactions_for_modal = None, None, [], {}
         
-        # Get DNA data
-        dna_data = None
-        ml_data = None
-        accounts = []
-        transactions = {}
-        insights = []
-        
-        if member_number in dna_cache:
-            dna_data = dna_cache[member_number]
+        if member_number_to_use in dna_cache:
+            dna_data = dna_cache[member_number_to_use]
         elif dna_client:
             try:
-                dna_data = dna_client.get_person_detail_by_member_number(member_number)
-                if dna_data:
-                    dna_cache[member_number] = dna_data
-            except Exception as e:
-                logging.error(f"[API] Error fetching DNA data for member {member_number}: {e}")
-        
-        # Get MeridianLink data
+                dna_data = dna_client.get_person_detail_by_member_number(member_number_to_use)
+                if dna_data: dna_cache[member_number_to_use] = dna_data
+            except Exception as e: logging.error(f"[API] Error fetching DNA data for member {member_number_to_use}: {e}")
+
         if dna_data and dna_data.get('ssn') and ml_client:
-            try:
-                ml_data = ml_client.query_meridian_link(dna_data['ssn'])
-            except Exception as e:
-                logging.error(f"[API] Error fetching MeridianLink data: {e}")
+            try: ml_data = ml_client.query_meridian_link(dna_data['ssn'])
+            except Exception as e: logging.error(f"[API] Error fetching MeridianLink data for SSN related to member {member_number_to_use}: {e}")
         
-        # Build accounts list (DNA accounts + loans)
         if dna_data and dna_data.get('accounts'):
-            for account in dna_data['accounts']:
-                account_type = account.get('account_type', 'Account')
-                account_number = account.get('account_number', '')
-                balance = account.get('balance', '0.00')
-                accounts.append(f"{account_type} - ${balance}")
-        
-        # Add loans to accounts list
+            for acc in dna_data['accounts']: accounts.append(f"{acc.get('account_type', 'Account')} - ${acc.get('balance', '0.00')}")
         if ml_data:
-            for loan in ml_data:
-                loan_type = loan.get('loan_type', 'Loan')
-                loan_num = loan.get('loan_num', '')
-                accounts.append(f"{loan_type} #{loan_num}")
+            for loan in ml_data: accounts.append(f"{loan.get('loan_type', 'Loan')} #{loan.get('loan_num', '')}")
         
-        # Get transactions for first account
-        if member_number in transaction_cache and transaction_cache[member_number]:
-            first_account = list(transaction_cache[member_number].keys())[0]
-            transactions[accounts[0] if accounts else 'Account'] = transaction_cache[member_number][first_account][:8]
-        
-        # Get cached insights
-        if member_id in insight_cache:
-            insights_text = insight_cache[member_id]
-            insights = insights_text.split('\n') if insights_text else []
+        if member_number_to_use in transaction_cache and transaction_cache[member_number_to_use]:
+            account_keys = list(transaction_cache[member_number_to_use].keys())
+            if account_keys and accounts: 
+                 transactions_for_modal[accounts[0]] = transaction_cache[member_number_to_use][account_keys[0]][:8]
+
+        insights = insight_cache.get(checkin_id_for_api, "").split('\n') if insight_cache.get(checkin_id_for_api) else []
         
         return jsonify({
-            'accounts': accounts,
-            'transactions': transactions,
-            'insights': insights[:4],  # Limit to 4 for UI
-            'member_info': {
-                'name': dna_data.get('firstname', '') + ' ' + dna_data.get('lastname', '') if dna_data else record.get('Name', ''),
-                'member_number': member_number
-            }
+            'accounts': accounts, 'transactions': transactions_for_modal, 'insights': insights[:4],
+            'member_info': {'name': (dna_data.get('firstname', '') + ' ' + dna_data.get('lastname', '')).strip() if dna_data else record.get('Name', ''), 'member_number': member_number_to_use}
         })
-        
     except Exception as e:
-        logging.error(f"[API] Error in get_member_data for member {member_id}: {e}", exc_info=True)
+        logging.error(f"[API] Error in get_member_data for check-in {checkin_id_for_api}: {e}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/member_details/<int:checkin_id>')
 def member_details(checkin_id):
-    """Display detailed member information for a check-in."""
     global dna_cache, transaction_cache
     try:
-        # Fetch check-in record from DB
         record, error = database.get_facing_member_details(checkin_id)
         if error or not record:
             flash("Check-in record not found.", "error")
             return redirect(url_for('view_kiosk_queue'))
 
-        member_number = record.get('MemberNumber')
-        
-        # Initialize data and connection flags
-        dna_data = None
-        ml_data = None
-        dna_connected = False
-        ml_connected = False
-        
-        # Check if we have cached DNA data for this member
-        if member_number and member_number in dna_cache:
-            logging.info(f"[Member Details] Using cached DNA data for member {member_number}")
-            dna_data = dna_cache[member_number]
-            dna_connected = True
-        elif not member_number:
-            flash("No member number associated with this check-in.", "warning")
-            logging.warning(f"No member number for check-in ID {checkin_id}")
-        elif not dna_client:
-            flash("DNA API client not available. Member details may be incomplete.", "warning")
-            logging.warning("DNA API client not available for member details lookup")
-        else:
-            # Fetch DNA Data Synchronously
-            logging.info(f"[Member Details] Attempting synchronous DNA fetch for member {member_number}")
-            try:
-                person_details = dna_client.get_person_detail_by_member_number(member_number)
-                if person_details:
-                    dna_data = person_details
-                    dna_cache[member_number] = dna_data
-                    dna_connected = True
-                    logging.info(f"[Member Details] Successfully fetched DNA data for member {member_number}")
-                else:
-                    logging.warning(f"[Member Details] get_person_detail_by_member_number returned None for member {member_number}")
-                    dna_connected = False
-                    flash("Could not retrieve primary details from DNA.", "warning")
+        member_number_to_use = record.get('MemberNumber') 
 
-            except AttributeError:
-                logging.warning("[Member Details] get_person_detail_by_member_number not found, attempting fallback.")
+        dna_data, ml_data, account_transactions = None, None, {}
+        dna_connected, ml_connected = False, False
+        
+        if member_number_to_use:
+            if member_number_to_use in dna_cache:
+                logging.info(f"[Member Details] Using cached DNA data for active member {member_number_to_use}")
+                dna_data = dna_cache[member_number_to_use]
+                dna_connected = True 
+            elif dna_client:
+                logging.info(f"[Member Details] Attempting synchronous DNA fetch for active member {member_number_to_use}")
                 try:
-                    person_number = dna_client.get_person_number_by_member_number(member_number)
-                    if person_number:
-                        fallback_data = dna_client.get_taxid_data_by_person_number(person_number)
-                        if fallback_data:
-                            dna_data = fallback_data
-                            dna_cache[member_number] = dna_data
-                            dna_connected = True
-                            logging.info(f"[Member Details] Successfully fetched DNA data for member {member_number} (fallback)")
-                        else:
-                            logging.warning(f"[Member Details] DNA API connection failed (fallback) for member {member_number}")
-                            dna_connected = False
-                            flash("Could not retrieve fallback details from DNA.", "warning")
-                    else:
-                        logging.warning(f"[Member Details] Person number not found for member {member_number} (fallback)")
-                        dna_connected = False
-                        flash("Member number not found in DNA (fallback).", "warning")
-                except Exception as fallback_e:
-                    logging.error(f"[Member Details] DNA API call failed (fallback) for member {member_number}: {fallback_e}", exc_info=True)
-                    dna_connected = False
-                    flash("Error during fallback DNA lookup.", "danger")
-            except Exception as e:
-                logging.error(f"[Member Details] DNA API call failed for member {member_number}: {e}", exc_info=True)
-                dna_connected = False
-                flash("An error occurred fetching data from DNA.", "danger")
+                    person_details = dna_client.get_person_detail_by_member_number(member_number_to_use)
+                    if person_details:
+                        dna_data = person_details
+                        dna_cache[member_number_to_use] = dna_data
+                        dna_connected = True
+                        logging.info(f"[Member Details] Successfully fetched DNA data for active member {member_number_to_use}")
+                    else: 
+                        logging.warning(f"[Member Details] get_person_detail_by_member_number returned None for active member {member_number_to_use}")
+                        flash(f"Could not retrieve DNA details for member number {member_number_to_use}. The number might be invalid or not found.", "warning")
+                except Exception as e:
+                    logging.error(f"[Member Details] DNA API call failed for active member {member_number_to_use}: {e}", exc_info=True)
+                    flash("An error occurred fetching data from DNA.", "danger")
+            else: 
+                 flash("DNA API client not available. Member details may be incomplete.", "warning")
+                 logging.warning("DNA API client not available for member_details lookup (active member number).")
+        else: 
+            flash("No Member Number is currently set for this check-in. Please enter one to fetch details.", "info")
+            logging.info(f"No active member number for API lookups for check-in ID {checkin_id}")
 
-        # Fetch MeridianLink Data
-        if dna_connected and dna_data and dna_data.get('ssn') and ml_client:
+        if dna_data and dna_data.get('ssn') and ml_client:
             ssn = dna_data['ssn']
-            logging.info(f"[Member Details] Attempting MeridianLink lookup for SSN ending in: {ssn[-4:]}")
+            logging.info(f"[Member Details] Attempting MeridianLink lookup for SSN ending in: {ssn[-4:]} (related to member {member_number_to_use})")
             try:
                 ml_data = ml_client.query_meridian_link(ssn)
-                if ml_data is not None:
-                    ml_connected = True
-                    logging.info(f"[Member Details] MeridianLink lookup successful. Found {len(ml_data)} loan(s).")
-                else:
-                    ml_connected = False
-                    logging.warning(f"[Member Details] MeridianLink lookup failed (returned None) for SSN ending in: {ssn[-4:]}")
-                    flash("Could not retrieve loan data from MeridianLink.", "warning")
+                if ml_data is not None: 
+                    ml_connected = True 
+                    logging.info(f"[Member Details] MeridianLink lookup successful for SSN related to member {member_number_to_use}. Found {len(ml_data)} loan(s).")
             except Exception as ml_e:
-                logging.error(f"[Member Details] Error during MeridianLink lookup: {ml_e}", exc_info=True)
-                ml_connected = False
+                logging.error(f"[Member Details] Error during MeridianLink lookup (member {member_number_to_use}): {ml_e}", exc_info=True)
                 flash("An error occurred during MeridianLink lookup.", "danger")
-        elif dna_connected and dna_data and not dna_data.get('ssn'):
-            logging.warning(f"[Member Details] SSN not found in DNA data for member {member_number}. Skipping MeridianLink lookup.")
-        elif not ml_client:
-            logging.warning("[Member Details] MeridianLink client not available. Skipping ML lookup.")
+        elif dna_data and not dna_data.get('ssn'):
+            logging.warning(f"[Member Details] SSN not found in DNA data for member {member_number_to_use}. Skipping MeridianLink lookup.")
+        elif not ml_client and member_number_to_use and dna_data : 
+             logging.warning("[Member Details] MeridianLink client not available. Skipping ML lookup.")
 
-        # Get transactions from cache or fetch if needed
-        account_transactions = {}
-        if dna_connected and dna_data and dna_data.get('accounts'):
-            logging.info(f"[Member Details] Getting transactions for all accounts")
-            
-            if member_number in transaction_cache:
-                logging.info(f"[Member Details] Using cached transactions for member {member_number}")
-                account_transactions = transaction_cache[member_number]
-            else:
-                transaction_cache[member_number] = {}
-                
-                if dna_client:
-                    for account in dna_data['accounts']:
-                        account_number = account.get('account_number')
-                        if account_number:
-                            logging.info(f"[Member Details] Fetching transactions for account {account_number}")
-                            try:
-                                transactions = dna_client.get_financial_transactions(account_number, limit=10)
-                                if transactions is not None:
-                                    transaction_cache[member_number][account_number] = transactions
-                                    logging.info(f"[Member Details] Successfully fetched {len(transactions)} transactions for account {account_number}")
-                                else:
-                                    logging.warning(f"[Member Details] Failed to fetch transactions for account {account_number}")
-                                    transaction_cache[member_number][account_number] = []
-                            except Exception as tx_e:
-                                logging.error(f"[Member Details] Error fetching transactions for account {account_number}: {tx_e}", exc_info=True)
-                                transaction_cache[member_number][account_number] = []
-                    
-                    account_transactions = transaction_cache[member_number]
-                else:
-                    logging.warning("[Member Details] DNA client not available for transaction fetching")
-            
-            logging.info(f"[Member Details] Using transactions for {len(account_transactions)} accounts")
+
+        if dna_data and dna_data.get('accounts') and member_number_to_use:
+            logging.info(f"[Member Details] Getting transactions for active member {member_number_to_use}")
+            if member_number_to_use in transaction_cache:
+                account_transactions = transaction_cache[member_number_to_use]
+            elif dna_client:
+                transaction_cache[member_number_to_use] = {}
+                for account in dna_data['accounts']:
+                    account_number_val = account.get('account_number')
+                    if account_number_val:
+                        try:
+                            transactions = dna_client.get_financial_transactions(account_number_val, limit=10)
+                            transaction_cache[member_number_to_use][account_number_val] = transactions if transactions is not None else []
+                        except Exception as tx_e:
+                            logging.error(f"[Member Details] Error fetching transactions for account {account_number_val} (member {member_number_to_use}): {tx_e}", exc_info=True)
+                            transaction_cache[member_number_to_use][account_number_val] = []
+                account_transactions = transaction_cache[member_number_to_use]
+        
+        is_partial_data = not member_number_to_use or not dna_data or not dna_data.get('persnbr')
 
         return render_template('member_details.html',
-                               record=record,
+                               record=record, 
                                dna_data=dna_data,
                                ml_data=ml_data,
-                               dna_connected=dna_connected,
-                               ml_connected=ml_connected,
+                               dna_connected=dna_connected, 
+                               ml_connected=ml_connected,   
+                               is_partial_data=is_partial_data,
                                checkin_id=checkin_id,
+                               member_number_to_use=member_number_to_use, 
                                account_transactions=account_transactions)
 
     except Exception as e:
-        logging.error(f"Unexpected error in member_details route: {e}", exc_info=True)
+        logging.error(f"Unexpected error in member_details route for checkin_id {checkin_id}: {e}", exc_info=True)
         flash("An unexpected error occurred while loading member details.", "error")
         return redirect(url_for('view_kiosk_queue'))
 
+@app.route('/update_member_number/<int:checkin_id>', methods=['POST'])
+def update_member_number(checkin_id):
+    new_member_number_input = request.form.get('new_member_number', '').strip()
+    if not new_member_number_input or not new_member_number_input.isdigit():
+        flash("Invalid member number format. Please enter a valid number.", "danger")
+        return redirect(url_for('member_details', checkin_id=checkin_id))
+
+    current_record, db_error = database.get_facing_member_details(checkin_id)
+    if db_error or not current_record:
+        flash(f"Could not find check-in record {checkin_id} to update.", "danger")
+        return redirect(url_for('view_kiosk_queue'))
+
+    old_active_member_number = current_record.get('MemberNumber') 
+
+    success, message = database.update_member_number_for_checkin(checkin_id, new_member_number_input, 'manual_entry')
+
+    if success:
+        flash(f"Member number updated to {new_member_number_input} for check-in {checkin_id}. Fetching details...", "success")
+        logging.info(f"Member number for check-in {checkin_id} updated to {new_member_number_input} (manual_entry). Old active was {old_active_member_number}.")
+
+        if old_active_member_number and old_active_member_number != new_member_number_input:
+            logging.info(f"Clearing cache for old active member number: {old_active_member_number}")
+            dna_cache.pop(old_active_member_number, None)
+            transaction_cache.pop(old_active_member_number, None)
+        
+        dna_cache.pop(new_member_number_input, None)
+        transaction_cache.pop(new_member_number_input, None)
+        insight_cache.pop(checkin_id, None)
+
+        if dna_client:
+            logging.info(f"[UpdateMemberNumber] Attempting synchronous DNA fetch for new active member number: {new_member_number_input}")
+            try:
+                new_dna_data = dna_client.get_person_detail_by_member_number(new_member_number_input)
+                if new_dna_data:
+                    dna_cache[new_member_number_input] = new_dna_data
+                    logging.info(f"[UpdateMemberNumber] Successfully fetched and cached DNA data for {new_member_number_input}")
+                    if new_dna_data.get('ssn') and ml_client:
+                        try: ml_client.query_meridian_link(new_dna_data['ssn'])
+                        except Exception as ml_e: logging.error(f"[UpdateMemberNumber] Error querying MeridianLink for {new_member_number_input}: {ml_e}")
+                    if new_dna_data.get('accounts'):
+                        transaction_cache[new_member_number_input] = {}
+                        for account in new_dna_data['accounts']:
+                            acc_num = account.get('account_number')
+                            if acc_num:
+                                try:
+                                    txns = dna_client.get_financial_transactions(acc_num, limit=10)
+                                    transaction_cache[new_member_number_input][acc_num] = txns if txns is not None else []
+                                except Exception as tx_e: logging.error(f"[UpdateMemberNumber] Error fetching tx for acc {acc_num} (member {new_member_number_input}): {tx_e}")
+                        logging.info(f"[UpdateMemberNumber] Transactions re-fetched for {new_member_number_input}")
+                else: 
+                    flash(f"Could not retrieve DNA details for the new member number {new_member_number_input}. It may be invalid.", "warning")
+            except Exception as e:
+                logging.error(f"[UpdateMemberNumber] Error during sync DNA fetch for {new_member_number_input}: {e}", exc_info=True)
+                flash("An error occurred fetching data for the new member number.", "danger")
+    else:
+        flash(f"Failed to update member number: {message}", "danger")
+
+    return redirect(url_for('member_details', checkin_id=checkin_id))
+
+@app.route('/revert_manual_member_number/<int:checkin_id>', methods=['POST'])
+def revert_manual_member_number(checkin_id):
+    current_record, db_error = database.get_facing_member_details(checkin_id)
+    if db_error or not current_record:
+        flash(f"Could not find check-in record {checkin_id} to revert.", "danger")
+        return redirect(url_for('view_kiosk_queue'))
+
+    # The member number that was active (and manually entered) before reverting
+    member_number_before_revert = current_record.get('MemberNumber') 
+
+    success, message = database.revert_manual_entry(checkin_id)
+
+    if success:
+        flash("Manually entered member number has been cleared. Member details reset.", "success")
+        logging.info(f"Member number information for check-in {checkin_id} was cleared/reverted.")
+
+        # Cache Management for the member number that was just cleared
+        if member_number_before_revert:
+            logging.info(f"Clearing cache for prior manual member number: {member_number_before_revert}")
+            dna_cache.pop(member_number_before_revert, None)
+            transaction_cache.pop(member_number_before_revert, None)
+        
+        # Always clear insights for this check-in
+        insight_cache.pop(checkin_id, None)
+        logging.info(f"Insights cache cleared for check-in {checkin_id} after revert.")
+
+    else:
+        flash(f"Failed to clear manual member number: {message}", "danger")
+        logging.error(f"Failed to revert manual entry for check-in {checkin_id}: {message}")
+
+    return redirect(url_for('member_details', checkin_id=checkin_id))
+
+
 @app.route('/get_transactions/<account_number>')
 def get_transactions(account_number):
-    """Fetches transaction history for a specific account number."""
-    if not dna_client:
-        logging.warning(f"[AJAX Transactions] DNA client not available for account {account_number}")
-        return jsonify({'error': 'DNA client not available'}), 503
-
+    if not dna_client: return jsonify({'error': 'DNA client not available'}), 503
     try:
         transactions = dna_client.get_financial_transactions(account_number, limit=10)
-
-        if transactions is None:
-            logging.warning(f"[AJAX Transactions] get_financial_transactions returned None for account {account_number}")
-            return jsonify({'error': 'Failed to retrieve transactions'}), 500
-        else:
-            logging.info(f"[AJAX Transactions] Successfully retrieved {len(transactions)} transactions for account {account_number}")
-            return jsonify(transactions)
-
+        return jsonify(transactions if transactions is not None else []) 
     except Exception as e:
-        logging.error(f"[AJAX Transactions] Unexpected error fetching transactions for account {account_number}: {e}", exc_info=True)
+        logging.error(f"[AJAX Transactions] Error: {e}", exc_info=True)
         return jsonify({'error': 'An unexpected error occurred'}), 500
 
-# ─── AI INSIGHTS GENERATION ────────────────────────────────────────────────────
 def _generate_insights_thread(checkin_id):
-    """Background worker to call your HTTP‐based generator and cache the results."""
     try:
         from insight_generator import generate_insights
-
         record, _ = database.get_facing_member_details(checkin_id)
-        mnum = record.get('MemberNumber')
+        active_member_num = record.get('MemberNumber') 
+        
+        if not active_member_num: # If MemberNumber is NULL after revert
+            insight_cache[checkin_id] = "Insights require a valid member number. Please enter one."
+            logging.info(f"[INSIGHTS] No member number available for check-in {checkin_id} after potential revert, cannot generate insights.")
+            return
 
-        txs_by_account = transaction_cache.get(mnum, {})
-        all_transactions = []
-        for acct, items in txs_by_account.items():
-            if isinstance(items, list):
-                # Filter to only last 30 days for insights
-                recent_transactions = filter_recent_transactions(items, INSIGHTS_TRANSACTION_DAYS)
-                all_transactions.extend(recent_transactions)
+        txs_by_account = transaction_cache.get(active_member_num, {})
+        all_transactions = [tx for items in txs_by_account.values() if isinstance(items, list) for tx in filter_recent_transactions(items, INSIGHTS_TRANSACTION_DAYS)]
 
-        logging.info(f"[INSIGHTS] Generating insights for check-in {checkin_id} using {len(all_transactions)} transactions from last {INSIGHTS_TRANSACTION_DAYS} days (filtered from {sum(len(items) if isinstance(items, list) else 0 for items in txs_by_account.values())} total)…")
+        logging.info(f"[INSIGHTS] Generating insights for check-in {checkin_id} (member {active_member_num}) using {len(all_transactions)} transactions...")
         insights_list = generate_insights(all_transactions)
-
-        insight_cache[checkin_id] = "\n".join(insights_list)
-        logging.info(f"[INSIGHTS] Cached {len(insights_list)} insights for check-in {checkin_id}")
-
+        insight_cache[checkin_id] = "\n".join(insights_list) if insights_list else "No specific insights generated."
     except Exception as e:
         logging.error(f"[INSIGHTS] Insight generation failed for check-in {checkin_id}: {e}", exc_info=True)
         insight_cache[checkin_id] = "Error generating insights."
 
 @app.route('/generate_insights/<int:checkin_id>', methods=['POST'])
 def generate_insights_route(checkin_id):
-    """Kick off background insight generation once."""
-    logging.info(f"[INSIGHTS] Request to generate insights for check-in {checkin_id}")
-    if checkin_id not in insight_cache:
-        threading.Thread(
-            target=_generate_insights_thread,
-            args=(checkin_id,),
-            daemon=True
-        ).start()
+    insight_cache.pop(checkin_id, None) 
+    threading.Thread(target=_generate_insights_thread, args=(checkin_id,), daemon=True).start()
     return jsonify({'status': 'started'})
 
 @app.route('/get_insights/<int:checkin_id>')
 def get_insights_route(checkin_id):
-    """Poll for cached insights or pending."""
     if checkin_id in insight_cache:
         return jsonify({'status': 'done', 'insights': insight_cache[checkin_id]})
-    else:
-        return jsonify({'status': 'pending'})
+    return jsonify({'status': 'pending'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('WAITING_PORT', 8082)), debug=app.config['DEBUG'])
