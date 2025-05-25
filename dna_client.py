@@ -324,14 +324,14 @@ class DNAApiClient:
 
     def ensure_authentication(self):
         if not self.sso_ticket or not self.whois_response or datetime.now() >= self.auth_expiration:
-            self.logger.info("Authentication required. Starting authentication process.")
+            self.logger.info("[DNA_CLIENT] Starting new authentication process.")
             auth_success = self.authenticate()
             if not auth_success:
                 self.logger.warning("Authentication failed. DNA API features will be unavailable.")
                 return False
             return auth_success
         else:
-            self.logger.debug("Using existing authentication.")
+            self.logger.info("[DNA_CLIENT] Using existing valid authentication.")
             return True
             
     def _prepare_submit_request_envelope(self, request_body):
@@ -379,7 +379,7 @@ class DNAApiClient:
         Fetches person details using Member Number (ReqTypCd 7711) and returns the Person Number.
         Returns None if the API call fails due to connection issues or if the person is not found.
         """
-        self.logger.info(f"Attempting to fetch person details by member number: {member_number} using ReqTypCd 7711")
+        self.logger.info(f"[DNA_CLIENT] Attempting to fetch person number by member number: {member_number} using ReqTypCd 7711")
         try:
             if not self.ensure_authentication():
                 return None # Authentication failed
@@ -405,10 +405,12 @@ class DNAApiClient:
         }
 
         try:
+            self.logger.info(f"[DNA_CLIENT_API_CALL] Attempting to fetch person number via API for member number: {member_number}")
             response = self._make_request(self.dna_endpoint, headers, full_request_xml)
             if response is None:
                 self.logger.warning(f"API request failed when fetching person details for member number {member_number}")
                 return None
+            self.logger.info(f"[DNA_CLIENT_API_SUCCESS] Successfully received API response for person number: {member_number}")
 
             # Parse the response to extract the Person element
             try:
@@ -475,7 +477,7 @@ class DNAApiClient:
         Fetches detailed member info including accounts using Person Number (ReqTypCd 7725, Method 4).
         Returns None if the API call fails due to connection issues or if data is not found/parsed.
         """
-        self.logger.info(f"Attempting to fetch TaxId data by person number: {persnbr} using ReqTypCd 7725 / Method 4")
+        self.logger.info(f"[DNA_CLIENT] Attempting to fetch TaxId data by person number: {persnbr} using ReqTypCd 7725 / Method 4")
         try:
             if not self.ensure_authentication():
                 return None # Authentication failed
@@ -502,11 +504,12 @@ class DNAApiClient:
         }
 
         try:
+            self.logger.info(f"[DNA_CLIENT_API_CALL] Attempting to fetch TaxId data via API for person number: {persnbr}")
             response = self._make_request(self.dna_endpoint, headers, full_request_xml)
             if response is None:
                 self.logger.warning(f"API request failed when fetching TaxId data for person number {persnbr}")
                 return None
-
+            self.logger.info(f"[DNA_CLIENT_API_SUCCESS] Successfully received API response for TaxId data: {persnbr}")
             return self.parse_member_info(response.content)
         except Exception as e: 
             self.logger.error(f"Unexpected error getting TaxId data for person {persnbr}: {str(e)}", exc_info=True)
@@ -758,7 +761,7 @@ class DNAApiClient:
             return None
 
     def get_financial_transactions(self, acctNbr, limit=10):
-        self.logger.info(f"Retrieving financial transactions for account: {acctNbr}")
+        self.logger.info(f"[DNA_CLIENT] Retrieving financial transactions for account: {acctNbr}")
         try:
             if not self.ensure_authentication():
                 self.logger.error(f"Authentication failed for account {acctNbr} transactions")
@@ -797,14 +800,14 @@ class DNAApiClient:
             'SOAPAction': '"http://www.opensolutions.com/CoreApi/ICoreApiService/SubmitRequest"'
         }
         
-        self.logger.info(f"Making API call to fetch transactions for account {acctNbr}")
+        self.logger.info(f"[DNA_CLIENT_API_CALL] Attempting to fetch financial transactions via API for account: {acctNbr}")
         try:
             response = self._make_request(self.dna_endpoint, headers, full_request_xml)
             if response is None:
                  self.logger.warning(f"API request failed when fetching transactions for account {acctNbr}")
                  return None
-                 
-            self.logger.info(f"Successfully received response for account {acctNbr} transactions")
+            
+            self.logger.info(f"[DNA_CLIENT_API_SUCCESS] Successfully received API response for financial transactions for account: {acctNbr}")
             # Use the simpler parser from user feedback
             transactions = self.parse_financial_transactions(response.content)
             self.logger.info(f"Parsed {len(transactions) if transactions else 0} transactions for account {acctNbr}")
@@ -927,7 +930,7 @@ class DNAApiClient:
         This method uses MethodNbr=3 which returns data for the specified member number.
         Returns None if the API call fails due to connection issues or if the member is not found.
         """
-        self.logger.info(f"Attempting to fetch member info directly by member number: {member_number} using ReqTypCd 7725 / Method 3")
+        self.logger.info(f"[DNA_CLIENT] Attempting to fetch member info directly by member number: {member_number} using ReqTypCd 7725 / Method 3")
         try:
             if not self.ensure_authentication():
                 return None # Authentication failed
@@ -954,11 +957,12 @@ class DNAApiClient:
         }
 
         try:
+            self.logger.info(f"[DNA_CLIENT_API_CALL] Attempting to fetch member info via API for member number: {member_number}")
             response = self._make_request(self.dna_endpoint, headers, full_request_xml)
             if response is None:
                 self.logger.warning(f"API request failed when fetching member info for member number {member_number}")
                 return None
-
+            self.logger.info(f"[DNA_CLIENT_API_SUCCESS] Successfully received API response for member info: {member_number}")
             self.logger.debug(f"Full XML response before parsing:\n{self.prettify_xml(response.content)}")
             return self.parse_member_info(response.content)
         except Exception as e:
@@ -974,7 +978,7 @@ class DNAApiClient:
         Note: This method is being replaced by get_member_info_by_member_number which uses Method 3
         to directly get member info by member number.
         """
-        self.logger.info(f"Attempting to fetch person details directly by member number: {member_number}")
+        self.logger.info(f"[DNA_CLIENT] Fetching person details for member {member_number} using get_member_info_by_member_number.")
         try:
             # Use the new method that directly queries by member number
             return self.get_member_info_by_member_number(member_number)

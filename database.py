@@ -87,6 +87,50 @@ def add_visitor(visitor_data):
         if conn:
             conn.close()
 
+def revert_manual_entry(checkin_id):
+    """Clears MemberNumber, ManuallyEnteredMemberNumber, and MemberNumberSource for a check-in."""
+    conn = create_connection()
+    if not conn:
+        return False, "Database connection failed"
+
+    cursor = conn.cursor()
+    sql = f"""
+        UPDATE {DB_KIOSK_TABLE}
+        SET 
+            MemberNumber = NULL,
+            ManuallyEnteredMemberNumber = NULL, 
+            MemberNumberSource = NULL,
+            UpdatedDate = GETDATE()
+        WHERE FacingMemberID = ?
+    """
+    params = (checkin_id,)
+
+    try:
+        logging.info(f"Executing SQL for revert_manual_entry: ID={checkin_id}")
+        cursor.execute(sql, params)
+        if cursor.rowcount == 0:
+            conn.rollback()
+            logging.warning(f"Check-in ID {checkin_id} not found for revert manual entry.")
+            return False, "Record not found."
+        conn.commit()
+        logging.info(f"Check-in ID {checkin_id} member number information cleared/reverted successfully.")
+        return True, None
+    except pyodbc.Error as ex:
+        sqlstate = ex.args[0]
+        message = ex.args[1]
+        conn.rollback()
+        logging.error(f"Failed to revert manual entry for check-in ID {checkin_id}. SQLSTATE: {sqlstate} Message: {message}")
+        return False, f"Database error: {message}"
+    except Exception as e:
+        logging.error(f"An unexpected error occurred while reverting manual entry for check-in ID {checkin_id}: {str(e)}")
+        conn.rollback()
+        return False, f"An unexpected error occurred: {str(e)}"
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 # ==============================================================
 # == NEW: Member Facing Check-In Database Functions           ==
@@ -100,26 +144,32 @@ def add_facing_member(details):
 
     cursor = conn.cursor()
     # Use environment variable for table name
-    # Use environment variable for table name
-    # Assumes the DB_KIOSK_TABLE has columns: SystemName, SystemAddress, SystemHomePhone, SystemEmail, SystemCellPhone
+    # Assumes the DB_KIOSK_TABLE has columns: SystemName, SystemAddress, SystemHomePhone, SystemEmail, SystemCellPhone,
+    # ManuallyEnteredMemberNumber, MemberNumberSource
     sql = f"""
         INSERT INTO {DB_KIOSK_TABLE} (
             IsCurrentMember, HelpTopic, SubIssue, Name, Last4SSN, MemberNumber,
+            ManuallyEnteredMemberNumber, MemberNumberSource, -- Updated columns
             HelpWithAccountTransaction, HelpWithFraud, HelpWithFundsTransfer, HelpWithLoanPayment,
-            SubmittedBy, CreatedDate,
-            SystemName, SystemAddress, SystemHomePhone, SystemEmail, SystemCellPhone, -- Added System fields from DNA lookup
+            SubmittedBy, CreatedDate, UpdatedDate,
+            SystemName, SystemAddress, SystemHomePhone, SystemEmail, SystemCellPhone, 
             Status
         )
         OUTPUT INSERTED.FacingMemberID -- Get the newly created ID
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), ?, ?, ?, ?, ?, 'Waiting') -- Added placeholders for System fields and default Status
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE(), ?, ?, ?, ?, ?, 'Waiting')
     """
+    member_number_from_kiosk = details.get('MemberNumber')
+    member_number_source = 'kiosk' if member_number_from_kiosk else None
+
     params = (
         details.get('IsCurrentMember', False), # Default to False if not provided
         details.get('HelpTopic'),
         details.get('SubIssue'),
         details.get('Name'), # Name entered by user
         details.get('Last4SSN'), # Last 4 entered by user
-        details.get('MemberNumber'), # Member number entered by user
+        member_number_from_kiosk, # MemberNumber (original from kiosk)
+        None,                     # ManuallyEnteredMemberNumber is NULL on initial insert
+        member_number_source,     # MemberNumberSource
         details.get('HelpWithAccountTransaction', False),
         details.get('HelpWithFraud', False),
         details.get('HelpWithFundsTransfer', False),
@@ -313,12 +363,20 @@ def get_kiosk_queue_count(status='Waiting'):
     # ASSUMES a 'Status' column exists
     
     # Modified query to be more flexible with status matching (case-insensitive)
-    sql = f"""
-        SELECT COUNT(*) AS QueueCount
-        FROM {DB_KIOSK_TABLE}
-        WHERE UPPER(Status) = UPPER(?) OR Status IS NULL
-    """
-    params = (status,)
+    if status.upper() == 'WAITING':
+        sql = f"""
+            SELECT COUNT(*) AS QueueCount
+            FROM {DB_KIOSK_TABLE}
+            WHERE UPPER(Status) = 'WAITING' OR Status IS NULL
+        """
+        params = ()
+    else:
+        sql = f"""
+            SELECT COUNT(*) AS QueueCount
+            FROM {DB_KIOSK_TABLE}
+            WHERE UPPER(Status) = UPPER(?)
+        """
+        params = (status,)
     try:
         logging.info(f"Executing SQL for get_kiosk_queue_count with status: {status}")
         cursor.execute(sql, params)
@@ -356,7 +414,7 @@ def update_kiosk_queue_status(facing_member_id, new_status='Handled'):
     # Modified query to be more flexible with status matching
     sql = f"""
         UPDATE {DB_KIOSK_TABLE}
-        SET Status = ?
+        SET Status = ?, UpdatedDate = GETDATE()
         WHERE FacingMemberID = ? 
     """
     params = (new_status, facing_member_id)
@@ -393,3 +451,49 @@ def update_kiosk_queue_status(facing_member_id, new_status='Handled'):
             conn.close()
 
 # --- End Kiosk Queue Functions ---
+
+def update_member_number_for_checkin(checkin_id, new_member_number, source):
+    """Updates the MemberNumber, ManuallyEnteredMemberNumber, MemberNumberSource, and UpdatedDate for a check-in."""
+    conn = create_connection()
+    if not conn:
+        return False, "Database connection failed"
+
+    cursor = conn.cursor()
+    sql = f"""
+        UPDATE {DB_KIOSK_TABLE}
+        SET 
+            MemberNumber = ?,                 -- MemberNumber becomes the new "active" number
+            ManuallyEnteredMemberNumber = ?,  -- Store the manually entered value here
+            MemberNumberSource = ?,           -- Set source to 'manual_entry'
+            UpdatedDate = GETDATE()
+        WHERE FacingMemberID = ?
+    """
+    # When source is 'manual_entry', new_member_number is stored in both MemberNumber and ManuallyEnteredMemberNumber
+    params = (new_member_number, new_member_number, source, checkin_id)
+
+    try:
+        logging.info(f"Executing SQL for update_member_number_for_checkin: ID={checkin_id}, NewActiveMemberNumber={new_member_number}, ManuallyEntered={new_member_number}, Source={source}")
+        cursor.execute(sql, params)
+        if cursor.rowcount == 0:
+            conn.rollback()
+            logging.warning(f"Check-in ID {checkin_id} not found for member number update.")
+            return False, "Record not found."
+        conn.commit()
+        logging.info(f"Check-in ID {checkin_id} member number updated successfully.")
+        return True, None
+    except pyodbc.Error as ex:
+        sqlstate = ex.args[0]
+        message = ex.args[1]
+        conn.rollback()
+        logging.error(f"Failed to update member number for check-in. SQLSTATE: {sqlstate} Message: {message}")
+        # Consider checking for specific column name errors if table might not be updated
+        return False, f"Database error: {message}"
+    except Exception as e:
+        logging.error(f"An unexpected error occurred updating member number: {str(e)}")
+        conn.rollback()
+        return False, f"An unexpected error occurred: {str(e)}"
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()

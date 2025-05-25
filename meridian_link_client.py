@@ -85,14 +85,14 @@ class MeridianLinkClient:
                 <SEARCH_QUERY borrower_ssn="{ssn}"/>
             </REQUEST>
             """
-            self.logger.info(f"Sending request to Meridian Link API for SSN: {ssn}")
+            self.logger.info(f"[ML_CLIENT_API_CALL] Attempting to query Meridian Link API for SSN ending: {ssn[-4:] if ssn else 'N/A'}")
             self.logger.debug(f"Request payload: {xml_payload}")
 
             # Use verify=self.verify_ssl
             response = requests.post(self.api_url, data=xml_payload, headers={'Content-Type': 'application/xml'}, verify=self.verify_ssl, timeout=30) # Added timeout
             response.raise_for_status()
 
-            self.logger.info(f"Received response from Meridian Link API (Search). Status code: {response.status_code}")
+            self.logger.info(f"[ML_CLIENT_API_SUCCESS] Successfully received API response from Meridian Link (Search) for SSN ending: {ssn[-4:] if ssn else 'N/A'}. Status code: {response.status_code}")
             self.logger.debug(f"Response content: {response.content}")
             
             root = ET.fromstring(response.content)
@@ -167,14 +167,14 @@ class MeridianLinkClient:
         """
 
     def _make_api_request(self, xml_payload):
-        self.logger.info("Sending GET LOAN request to Meridian Link API")
+        self.logger.info(f"[ML_CLIENT_API_CALL] Attempting to send GET LOAN request to Meridian Link API.")
         self.logger.debug(f"Request payload: {xml_payload}")
 
         # Use verify=self.verify_ssl
         response = requests.post(self.get_loan_url, data=xml_payload, headers={'Content-Type': 'application/xml'}, verify=self.verify_ssl, timeout=30) # Added timeout
         response.raise_for_status()
 
-        self.logger.info(f"Meridian Link API response status code (Get Loan): {response.status_code}")
+        self.logger.info(f"[ML_CLIENT_API_SUCCESS] Successfully received API response from Meridian Link (Get Loan). Status code: {response.status_code}")
         self.logger.debug(f"Response content: {response.content}")
         
         return response
