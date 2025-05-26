@@ -1,4 +1,4 @@
-  /* Core Variables - Used across all templates */
+/* Core Variables - Used across all templates */
 :root {
     /* Light mode colors - Solarized theme */
     --light-bg: #FDF6E3;
@@ -1607,4 +1607,25 @@ form {
     background-color: #157347 !important; /* Slightly darker green */
     border-color: #146c43 !important;
     color: #fff !important;
+}
+
+/* Custom Scrollbar for Dark Mode */
+.dark-mode-scrollbar::-webkit-scrollbar {
+    width: 8px;
+}
+.dark-mode-scrollbar::-webkit-scrollbar-track {
+    background: #2d3748; /* Tailwind gray-800 */
+}
+.dark-mode-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #4a5568; /* Tailwind gray-600 */
+    border-radius: 4px;
+    border: 2px solid #2d3748; /* Tailwind gray-800 */
+}
+.dark-mode-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #718096; /* Tailwind gray-500 */
+}
+/* For Firefox */
+.dark-mode-scrollbar {
+   scrollbar-width: thin;
+   scrollbar-color: #4a5568 #2d3748; /* thumb track */
 }
