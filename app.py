@@ -358,51 +358,79 @@ def member_details(checkin_id):
 
         dna_data, ml_data, account_transactions = None, None, {}
         dna_connected, ml_connected = False, False
+        dna_error_message, ml_error_message = None, None
         
-        if member_number_to_use:
+        if not DNA_CLIENT_AVAILABLE:
+            dna_error_message = "DNA Client is not available or failed to initialize. Please check system configuration."
+        elif not member_number_to_use:
+            # This case is handled by is_partial_data and flash messages already
+            flash("No Member Number is currently set for this check-in. Please enter one to fetch details.", "info")
+            logging.info(f"No active member number for API lookups for check-in ID {checkin_id}")
+        else: # Attempt DNA fetch only if client is available and member_number_to_use exists
             if member_number_to_use in dna_cache:
                 logging.info(f"[Member Details] Using cached DNA data for active member {member_number_to_use}")
                 dna_data = dna_cache[member_number_to_use]
-                dna_connected = True 
-            elif dna_client:
+                dna_connected = True # If in cache, assume it was connected
+                logging.info(f"[Member Details] Using cached DNA data for active member {member_number_to_use}")
+            else: # dna_client is available and member_number_to_use exists, but not in cache
                 logging.info(f"[Member Details] Attempting synchronous DNA fetch for active member {member_number_to_use}")
                 try:
                     person_details = dna_client.get_person_detail_by_member_number(member_number_to_use)
-                    if person_details:
+                    if person_details and person_details.get('persnbr'): # Check for essential data
                         dna_data = person_details
                         dna_cache[member_number_to_use] = dna_data
                         dna_connected = True
                         logging.info(f"[Member Details] Successfully fetched DNA data for active member {member_number_to_use}")
-                    else: 
-                        logging.warning(f"[Member Details] get_person_detail_by_member_number returned None for active member {member_number_to_use}")
-                        flash(f"Could not retrieve DNA details for member number {member_number_to_use}. The number might be invalid or not found.", "warning")
-                except Exception as e:
-                    logging.error(f"[Member Details] DNA API call failed for active member {member_number_to_use}: {e}", exc_info=True)
-                    flash("An error occurred fetching data from DNA.", "danger")
-            else: 
-                 flash("DNA API client not available. Member details may be incomplete.", "warning")
-                 logging.warning("DNA API client not available for member_details lookup (active member number).")
-        else: 
-            flash("No Member Number is currently set for this check-in. Please enter one to fetch details.", "info")
-            logging.info(f"No active member number for API lookups for check-in ID {checkin_id}")
+                    elif person_details: # Got some data, but it's incomplete
+                        dna_data = person_details # Store what we got
+                        dna_connected = True # Connection was made
+                        dna_error_message = f"Core DNA data is incomplete for member number {member_number_to_use}."
+                        logging.warning(f"[Member Details] Incomplete DNA data for {member_number_to_use}: {person_details}")
+                    else: # No person_details returned from client call
+                        dna_connected = True # Connection was made, but no data found
+                        dna_error_message = f"Member data not found in DNA for member number {member_number_to_use}."
+                        logging.warning(f"[Member Details] get_person_detail_by_member_number returned None or empty for active member {member_number_to_use}")
+                except DNAApiError as e: # Specific API error from client
+                    dna_connected = False # Explicitly set as connection/API call failed
+                    dna_error_message = f"DNA API error for member {member_number_to_use}: {str(e)}"
+                    logging.error(f"[Member Details] DNA API error for active member {member_number_to_use}: {e}", exc_info=True)
+                except Exception as e: # Other unexpected errors during DNA fetch
+                    dna_connected = False
+                    dna_error_message = f"An unexpected error occurred fetching DNA data for member {member_number_to_use}."
+                    logging.error(f"[Member Details] Unexpected DNA API call failed for active member {member_number_to_use}: {e}", exc_info=True)
 
-        if dna_data and dna_data.get('ssn') and ml_client:
+        # MeridianLink Data Fetching
+        if not ML_CLIENT_AVAILABLE:
+            ml_error_message = "MeridianLink Client is not available or failed to initialize. Please check system configuration."
+        elif not dna_data or not dna_data.get('ssn'):
+            # This case is handled by is_partial_data or dna_error_message; ML part will just not show data.
+            if member_number_to_use and dna_data and not dna_error_message: # Only log if DNA part was seemingly okay
+                 logging.warning(f"[Member Details] SSN not found in DNA data for member {member_number_to_use}. Skipping MeridianLink lookup.")
+        else: # ML Client available, and we have dna_data with an SSN
             ssn = dna_data['ssn']
             logging.info(f"[Member Details] Attempting MeridianLink lookup for SSN ending in: {ssn[-4:]} (related to member {member_number_to_use})")
             try:
-                ml_data = ml_client.query_meridian_link(ssn)
-                if ml_data is not None: 
+                ml_data_result = ml_client.query_meridian_link(ssn)
+                if ml_data_result is not None: # API call was made, result could be empty list (no loans) or list of loans
+                    ml_data = ml_data_result
                     ml_connected = True 
                     logging.info(f"[Member Details] MeridianLink lookup successful for SSN related to member {member_number_to_use}. Found {len(ml_data)} loan(s).")
-            except Exception as ml_e:
-                logging.error(f"[Member Details] Error during MeridianLink lookup (member {member_number_to_use}): {ml_e}", exc_info=True)
-                flash("An error occurred during MeridianLink lookup.", "danger")
-        elif dna_data and not dna_data.get('ssn'):
-            logging.warning(f"[Member Details] SSN not found in DNA data for member {member_number_to_use}. Skipping MeridianLink lookup.")
-        elif not ml_client and member_number_to_use and dna_data : 
-             logging.warning("[Member Details] MeridianLink client not available. Skipping ML lookup.")
-
-
+                    if not ml_data: # Empty list means no loans found
+                        ml_error_message = f"No loan applications found in MeridianLink for member {member_number_to_use} (SSN provided)."
+                else: # query_meridian_link returned None, implying an error or specific "not found"
+                    ml_connected = True # Connection was attempted
+                    ml_error_message = f"Could not retrieve loan data from MeridianLink for member {member_number_to_use} (SSN provided)."
+                    logging.warning(f"[Member Details] MeridianLink lookup returned None for SSN related to member {member_number_to_use}")
+            except MeridianLinkError as e: # Specific API error from client
+                ml_connected = False
+                ml_error_message = f"MeridianLink API error for member {member_number_to_use}: {str(e)}"
+                logging.error(f"[Member Details] MeridianLink API error (member {member_number_to_use}): {e}", exc_info=True)
+            except Exception as ml_e: # Other unexpected errors
+                ml_connected = False
+                ml_error_message = f"An unexpected error occurred during MeridianLink lookup for member {member_number_to_use}."
+                logging.error(f"[Member Details] Unexpected error during MeridianLink lookup (member {member_number_to_use}): {ml_e}", exc_info=True)
+        
+        # Transaction Fetching (remains largely the same, depends on dna_data)
         if dna_data and dna_data.get('accounts') and member_number_to_use:
             logging.info(f"[Member Details] Getting transactions for active member {member_number_to_use}")
             if member_number_to_use in transaction_cache:
@@ -427,7 +455,9 @@ def member_details(checkin_id):
                                dna_data=dna_data,
                                ml_data=ml_data,
                                dna_connected=dna_connected, 
-                               ml_connected=ml_connected,   
+                               ml_connected=ml_connected,
+                               dna_error_message=dna_error_message,
+                               ml_error_message=ml_error_message,
                                is_partial_data=is_partial_data,
                                checkin_id=checkin_id,
                                member_number_to_use=member_number_to_use, 
