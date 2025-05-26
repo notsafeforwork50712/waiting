@@ -120,14 +120,12 @@
           {% if dna_error_message %}
             <div class="alert alert-warning small" role="alert">{{ dna_error_message }}</div>
           {% elif not member_number_to_use %}
-             <p class="text-muted"><em>No member number set for this check-in. Please update above to query DNA.</em></p>
-          {% elif not dna_connected and record.MemberNumberSource == 'manual_entry' %} {# Attempted manual entry but DNA connect failed #}
-            <div class="alert alert-danger small" role="alert">Could not connect to DNA API for manually entered number {{ member_number_to_use }}. System issue likely.</div>
-          {% elif not dna_connected %} {# No manual entry, kiosk number might be null or failed connection #}
-            <div class="alert alert-warning small" role="alert">Cannot connect to DNA API. Please check system status or enter number manually.</div>
-          {% elif not dna_data or not dna_data.get('persnbr') %} {# Connected, but no valid data for this number #}
-            <p class="text-muted"><em>DNA details could not be retrieved for member number {{ member_number_to_use }}. It might be incorrect or essential data is missing.</em></p>
-          {% elif dna_data %} {# We have dna_data and implicitly dna_data.get('persnbr') is present #}
+            <p class="text-muted"><em>No member number is currently set for this check-in. Update above to fetch DNA data.</em></p>
+          {% elif not dna_connected %}
+            <div class="alert alert-danger small" role="alert">Unable to connect to DNA services for member {{ member_number_to_use }}. Please verify API status or configuration.</div>
+          {% elif not dna_data or not dna_data.get('persnbr') %}
+            <p class="text-muted"><em>Essential DNA data (like personal number) was not found for member {{ member_number_to_use }}. The number may be incorrect or the record is incomplete.</em></p>
+          {% elif dna_data %} {# We have dna_data and dna_data.get('persnbr') is present #}
             <p class="small"><strong>Name (from DNA):</strong> {{ dna_data.firstname }} {{ dna_data.lastname }}</p>
             <p class="small"><strong>Member Number (from DNA):</strong> {{ dna_data.member_number }}</p> 
             <p class="small"><strong>Address (from DNA):</strong> {{ dna_data.address }}</p>
@@ -169,9 +167,11 @@
                 {% endfor %}
               </div>
             {% else %}
-              <p class="text-muted"><em>No accounts found in DNA for this member.</em></p>
+              <p class="text-muted"><em>No DNA accounts found for member {{ member_number_to_use }}.</em></p>
             {% endif %}
-          {% endif %} 
+          {% else %} {# Fallback if none of the above conditions met, should ideally not be reached if logic is complete #}
+            <p class="text-muted"><em>DNA information is currently unavailable.</em></p>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -181,8 +181,8 @@
       <div class="card h-100">
         <div class="card-header">
           <h4>MeridianLink Loans
-            {% if ml_connected and ml_data %}<span class="badge bg-success">Connected</span>
-            {% elif ml_connected and not ml_data %}<span class="badge bg-info text-dark">No Loans Found</span>
+            {% if ml_connected and ml_data and ml_data|length > 0 %}<span class="badge bg-success">Connected</span>
+            {% elif ml_connected and ml_data is not none and ml_data|length == 0 %}<span class="badge bg-info text-dark">No Loans Found</span>
             {% elif dna_data and dna_data.get('ssn') and member_number_to_use %}<span class="badge bg-danger">Not Connected</span>
             {% else %}<span class="badge bg-secondary">Unavailable</span>
             {% endif %}
@@ -192,12 +192,12 @@
           {% if ml_error_message %}
             <div class="alert alert-warning small" role="alert">{{ ml_error_message }}</div>
           {% elif not member_number_to_use or not dna_data or not dna_data.get('ssn') %}
-            <p class="text-muted"><em>MeridianLink loan details require a valid member number and SSN from successfully fetched DNA data.</em></p>
+            <p class="text-muted"><em>MeridianLink loan details require valid DNA data including an SSN.</em></p>
           {% elif not ml_connected %}
-            <div class="alert alert-warning small" role="alert">Cannot connect to MeridianLink API. Please check system status.</div>
-          {% elif ml_data is none %} {# Explicitly check for None if client might return it for "not found" or error distinct from empty list #}
-             <p class="text-muted"><em>Could not retrieve MeridianLink loan data for member {{ member_number_to_use }}.</em></p>
-          {% elif not ml_data %} {# ml_data is an empty list here, meaning no loans found #}
+            <div class="alert alert-danger small" role="alert">Unable to connect to MeridianLink services for member {{ member_number_to_use }}. Please verify API status or configuration.</div>
+          {% elif ml_data is none %} 
+             <p class="text-muted"><em>Could not retrieve MeridianLink loan data for member {{ member_number_to_use }}. An error might have occurred or data is unavailable.</em></p>
+          {% elif not ml_data %} {# ml_data is an empty list here #}
              <p class="text-muted"><em>No MeridianLink loan applications found for member {{ member_number_to_use }}.</em></p>
           {% else %} {# ml_data is a non-empty list #}
             <ul class="list-group small">

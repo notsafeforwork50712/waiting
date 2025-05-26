@@ -1610,22 +1610,24 @@ form {
 }
 
 /* Custom Scrollbar for Dark Mode */
-.dark-mode-scrollbar::-webkit-scrollbar {
-    width: 8px;
+.dark-mode-scrollbar::-webkit-scrollbar { 
+    width: 8px; 
+    height: 8px; 
 }
-.dark-mode-scrollbar::-webkit-scrollbar-track {
-    background: #2d3748; /* Tailwind gray-800 */
-}
-.dark-mode-scrollbar::-webkit-scrollbar-thumb {
-    background-color: #4a5568; /* Tailwind gray-600 */
+.dark-mode-scrollbar::-webkit-scrollbar-track { 
+    background: #2d3748; 
     border-radius: 4px;
-    border: 2px solid #2d3748; /* Tailwind gray-800 */
 }
-.dark-mode-scrollbar::-webkit-scrollbar-thumb:hover {
-    background-color: #718096; /* Tailwind gray-500 */
+.dark-mode-scrollbar::-webkit-scrollbar-thumb { 
+    background-color: #555; 
+    border-radius: 4px; 
+    border: 2px solid #2d3748;
+}
+.dark-mode-scrollbar::-webkit-scrollbar-thumb:hover { 
+    background-color: #777; 
 }
 /* For Firefox */
-.dark-mode-scrollbar {
-   scrollbar-width: thin;
-   scrollbar-color: #4a5568 #2d3748; /* thumb track */
+.dark-mode-scrollbar { 
+    scrollbar-width: thin; 
+    scrollbar-color: #555 #2d3748; 
 }

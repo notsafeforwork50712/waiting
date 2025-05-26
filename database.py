@@ -291,8 +291,8 @@ def get_facing_member_details(facing_member_id):
 
 # --- Kiosk Queue Functions ---
 
-def get_kiosk_queue(status='Waiting'):
-    """Retrieves FacingMembers records with a specific status (default 'Waiting'), ordered by CreatedDate."""
+def get_kiosk_queue(status='Waiting', filter_by_date=None):
+    """Retrieves FacingMembers records with a specific status, optionally filtered by date for 'Handled' status."""
     conn = create_connection()
     if not conn:
         return [], "Database connection failed"
@@ -311,23 +311,39 @@ def get_kiosk_queue(status='Waiting'):
     if status.upper() == 'WAITING':
         sql = f"""
             SELECT
-                FacingMemberID, Name, HelpTopic, SubIssue, CreatedDate, Status, MemberNumber
+                FacingMemberID, Name, HelpTopic, SubIssue, CreatedDate, UpdatedDate, Status, MemberNumber 
             FROM {DB_KIOSK_TABLE}
             WHERE UPPER(Status) = 'WAITING' OR Status IS NULL
             ORDER BY CreatedDate ASC -- Show oldest waiting first
         """
         params = ()
-    else:
+    elif status.upper() == 'HANDLED':
         sql = f"""
             SELECT
-                FacingMemberID, Name, HelpTopic, SubIssue, CreatedDate, Status
+                FacingMemberID, Name, HelpTopic, SubIssue, CreatedDate, UpdatedDate, Status 
             FROM {DB_KIOSK_TABLE}
             WHERE UPPER(Status) = UPPER(?)
-            ORDER BY CreatedDate DESC -- Show most recently handled first
         """
         params = (status,)
+        if filter_by_date:
+            sql += " AND CAST(UpdatedDate AS DATE) = ?"
+            params += (filter_by_date,)
+        sql += " ORDER BY UpdatedDate DESC" # Show most recently handled first
+    else: # Should not happen with current usage, but good to have a fallback
+        sql = f"""
+            SELECT
+                FacingMemberID, Name, HelpTopic, SubIssue, CreatedDate, UpdatedDate, Status, MemberNumber
+            FROM {DB_KIOSK_TABLE}
+            WHERE UPPER(Status) = UPPER(?)
+            ORDER BY CreatedDate DESC 
+        """
+        params = (status,)
+
     try:
-        logging.info(f"Executing SQL for get_kiosk_queue with status: {status}")
+        log_message = f"Executing SQL for get_kiosk_queue with status: {status}"
+        if filter_by_date and status.upper() == 'HANDLED':
+            log_message += f", filter_by_date: {filter_by_date}"
+        logging.info(log_message)
         cursor.execute(sql, params)
         columns = [column[0] for column in cursor.description]
         members = [dict(zip(columns, row)) for row in cursor.fetchall()]
